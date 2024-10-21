@@ -44,13 +44,14 @@ jobs:
             exit 1
           fi
 
-          oci --region ${{ secrets.OCI_REGION }} session authenticate --key-file oci_private_key.pem \
+          # Use --private-key-file instead of --key-file
+          oci --region ${{ secrets.OCI_REGION }} session authenticate --private-key-file oci_private_key.pem \
               --tenancy-id ${{ secrets.OCI_TENANCY_OCID }} \
               --user-id ${{ secrets.OCI_USER_OCID }} \
               --fingerprint ${{ secrets.OCI_KEY_FINGERPRINT }}
 
           echo "Logging in to Docker registry..."
-          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --key-file oci_private_key.pem)" ashburn.ocir.io
+          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --private-key-file oci_private_key.pem)" ashburn.ocir.io
 
       # Step 6: Push the Docker image to OCI Container Registry
       - name: Push Docker image to OCI Container Registry
