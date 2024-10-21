@@ -1,9 +1,9 @@
-name: CI/CD Pipeline to Push Docker Image to OCI
+name: Build and Push Docker Image to OCI
 
 on:
   push:
     branches:
-      - main  # This workflow runs on pushes to the main branch
+      - main
 
 jobs:
   build-and-push:
@@ -21,19 +21,24 @@ jobs:
       # Step 3: Build the Docker image
       - name: Build Docker image
         run: |
-          docker build -t ${{ secrets.OCI_IMAGE_REPOSITORY }}:latest .
+          echo "Building Docker image..."
+          docker build -t ashburn.ocir.io/id2w5ujfrkce/cicd:latest .
 
       # Step 4: Authenticate with OCI and log in to OCI Container Registry
       - name: Authenticate with OCI and Docker login
         run: |
-          echo ${{ secrets.OCI_PRIVATE_KEY }} | base64 --decode > oci_private_key.pem
+          echo "Authenticating with OCI..."
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" | base64 --decode > oci_private_key.pem
           oci --region ${{ secrets.OCI_REGION }} session authenticate --key-file oci_private_key.pem \
               --tenancy-id ${{ secrets.OCI_TENANCY_OCID }} \
               --user-id ${{ secrets.OCI_USER_OCID }} \
               --fingerprint ${{ secrets.OCI_KEY_FINGERPRINT }}
-          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --key-file oci_private_key.pem)" ${{ secrets.OCI_IMAGE_REPOSITORY }}
+
+          echo "Logging in to Docker registry..."
+          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --key-file oci_private_key.pem)" ashburn.ocir.io
 
       # Step 5: Push the Docker image to OCI Container Registry
       - name: Push Docker image to OCI Container Registry
         run: |
-          docker push ${{ secrets.OCI_IMAGE_REPOSITORY }}:latest
+          echo "Pushing Docker image to OCI..."
+          docker push ashburn.ocir.io/id2w5ujfrkce/cicd:latest
