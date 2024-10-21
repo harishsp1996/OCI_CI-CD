@@ -1,9 +1,9 @@
-name: Build and Push Docker Image to OCI
+name: CI/CD Pipeline to Push Docker Image to OCI
 
 on:
   push:
     branches:
-      - main
+      - main  # This workflow runs on pushes to the main branch
 
 jobs:
   build-and-push:
