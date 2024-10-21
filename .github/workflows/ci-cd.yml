@@ -1,60 +1,62 @@
-name: Build and Push Docker Image to OCI
+name: Build, Push, and Deploy Example
 
 on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  build-and-push:
+  build-and-publish-docker-image:
+    name: Build and Publish Docker Image
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the repository
-      - name: Checkout repository
-        uses: actions/checkout@v2
+      # Step 1: Checkout the code from the repository
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # Step 2: Install OCI CLI (if not available)
-      - name: Install OCI CLI
-        run: |
-          echo "Installing OCI CLI..."
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install oci-cli
+      # Step 2: Set up QEMU for multi-platform builds (if needed)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      # Step 3: Set up Docker Buildx
+      # Step 3: Set up Docker Buildx for advanced build capabilities
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v3
 
-      # Step 4: Build the Docker image
-      - name: Build Docker image
+      # Step 4: Login to Oracle Cloud Registry
+      - name: Login to Oracle Cloud Registry
         run: |
-          echo "Building Docker image..."
-          docker build -t ashburn.ocir.io/id2w5ujfrkce/cicd:latest .
-
-      # Step 5: Authenticate with OCI and log in to OCI Container Registry
-      - name: Authenticate with OCI and Docker login
-        run: |
-          echo "Authenticating with OCI..."
           echo "${{ secrets.OCI_PRIVATE_KEY }}" | base64 --decode > oci_private_key.pem
-          
-          # Check if the private key was decoded correctly
-          if [ ! -s oci_private_key.pem ]; then
-            echo "Failed to decode the OCI_PRIVATE_KEY."
-            exit 1
-          fi
-
-          # Use --private-key-file instead of --key-file
           oci --region ${{ secrets.OCI_REGION }} session authenticate --private-key-file oci_private_key.pem \
               --tenancy-id ${{ secrets.OCI_TENANCY_OCID }} \
               --user-id ${{ secrets.OCI_USER_OCID }} \
-              --fingerprint ${{ secrets.OCI_KEY_FINGERPRINT }}
-
+              --fingerprint ${{ secrets.OCI_CLI_FINGERPRINT }}
+          
           echo "Logging in to Docker registry..."
-          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --private-key-file oci_private_key.pem)" ashburn.ocir.io
+          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --private-key-file oci_private_key.pem)" ${{ secrets.OCIR_REGISTRY }}
 
-      # Step 6: Push the Docker image to OCI Container Registry
-      - name: Push Docker image to OCI Container Registry
+      # Step 5: Build Docker image
+      - name: Build Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/arm64
+          context: .
+          file: Dockerfile
+          tags: ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Step 6: Push Docker Image to Oracle Cloud Registry
+      - name: Push Docker Image to Oracle Cloud Registry
         run: |
-          echo "Pushing Docker image to OCI..."
-          docker push ashburn.ocir.io/id2w5ujfrkce/cicd:latest
+          docker push ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+
+      # Optional: Step 7: Clean up the private key file
+      - name: Cleanup
+        run: |
+          rm -f oci_private_key.pem
