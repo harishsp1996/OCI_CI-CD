@@ -1,4 +1,4 @@
-name: Build, Push, and Deploy Example
+name: Build, Push, and Deploy Docker Image with Versioning
 
 on:
   push:
@@ -10,53 +10,63 @@ on:
 
 jobs:
   build-and-publish-docker-image:
-    name: Build and Publish Docker Image
+    name: Build and publish Docker image
     runs-on: ubuntu-latest
-
     steps:
-      # Step 1: Checkout the code from the repository
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Step 2: Set up QEMU for multi-platform builds (if needed)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # Step 3: Set up Docker Buildx for advanced build capabilities
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Step 4: Login to Oracle Cloud Registry
       - name: Login to Oracle Cloud Registry
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" | base64 --decode > oci_private_key.pem
-          oci --region ${{ secrets.OCI_REGION }} session authenticate --private-key-file oci_private_key.pem \
-              --tenancy-id ${{ secrets.OCI_TENANCY_OCID }} \
-              --user-id ${{ secrets.OCI_USER_OCID }} \
-              --fingerprint ${{ secrets.OCI_CLI_FINGERPRINT }}
-          
-          echo "Logging in to Docker registry..."
-          docker login -u ${{ secrets.OCI_USER_OCID }} -p "$(oci iam auth token create --region ${{ secrets.OCI_REGION }} --user-id ${{ secrets.OCI_USER_OCID }} --description 'GitHub Actions Token' --private-key-file oci_private_key.pem)" ${{ secrets.OCIR_REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.OCIR_REGISTRY }}
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_AUTH_TOKEN }}
 
-      # Step 5: Build Docker image
-      - name: Build Docker Image
+      - name: Check for Existing Tags
+        id: check_tags
+        run: |
+          # Get existing tags for the image
+          TAGS=$(oci ce container-image list --repository-id ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }} --query "data[*].name" --raw-output)
+          
+          # Check for the latest version tag
+          echo "Existing tags: $TAGS"
+          LATEST_TAG="v0"
+          for TAG in $TAGS; do
+            if [[ $TAG =~ v([0-9]+) ]]; then
+              VERSION=${BASH_REMATCH[1]}
+              if (( VERSION > ${LATEST_TAG:1} )); then
+                LATEST_TAG="v$VERSION"
+              fi
+            fi
+          done
+          
+          # Determine the next version
+          NEXT_VERSION=$(( ${LATEST_TAG:1} + 1 ))
+          echo "Next version: v$NEXT_VERSION"
+          echo "next_version=v$NEXT_VERSION" >> $GITHUB_ENV
+
+      - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           platforms: linux/arm64
           context: .
           file: Dockerfile
-          tags: ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+          tags: |
+            ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+            ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:${{ env.next_version }}
           push: false
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Step 6: Push Docker Image to Oracle Cloud Registry
       - name: Push Docker Image to Oracle Cloud Registry
         run: |
           docker push ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
-
-      # Optional: Step 7: Clean up the private key file
-      - name: Cleanup
-        run: |
-          rm -f oci_private_key.pem
+          docker push ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:${{ env.next_version }}
