@@ -29,6 +29,13 @@ jobs:
         run: |
           echo "Authenticating with OCI..."
           echo "${{ secrets.OCI_PRIVATE_KEY }}" | base64 --decode > oci_private_key.pem
+
+          # Check if the private key was decoded correctly
+          if [ ! -s oci_private_key.pem ]; then
+            echo "Failed to decode the OCI_PRIVATE_KEY."
+            exit 1
+          fi
+
           oci --region ${{ secrets.OCI_REGION }} session authenticate --key-file oci_private_key.pem \
               --tenancy-id ${{ secrets.OCI_TENANCY_OCID }} \
               --user-id ${{ secrets.OCI_USER_OCID }} \
