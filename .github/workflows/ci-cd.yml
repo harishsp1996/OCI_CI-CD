@@ -1,72 +1,111 @@
-name: Build, Push, and Deploy Docker Image with Versioning
+name: Build, Tag, Push Docker Image, and Manage OCI Container
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 jobs:
-  build-and-publish-docker-image:
-    name: Build and publish Docker image
+  build-publish-manage:
+    name: Build, Push Docker Image, and Manage OCI Container
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
+      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}  # Using Auth Token for both OCI CLI & OCIR
+      haish_GITHUB_TOKEN: ${{ secrets.haish_GITHUB_TOKEN }}
+
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Oracle Cloud Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.OCIR_REGISTRY }}
-          username: ${{ secrets.OCIR_USERNAME }}
-          password: ${{ secrets.OCIR_AUTH_TOKEN }}
-
-      - name: Check for Existing Tags
-        id: check_tags
+      - name: Install OCI CLI
         run: |
-          # Get existing tags for the image
-          TAGS=$(oci ce container-image list --repository-id ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }} --query "data[*].name" --raw-output)
-          
-          # Check for the latest version tag
-          echo "Existing tags: $TAGS"
-          LATEST_TAG="v0"
-          for TAG in $TAGS; do
-            if [[ $TAG =~ v([0-9]+) ]]; then
-              VERSION=${BASH_REMATCH[1]}
-              if (( VERSION > ${LATEST_TAG:1} )); then
-                LATEST_TAG="v$VERSION"
-              fi
-            fi
-          done
-          
-          # Determine the next version
-          NEXT_VERSION=$(( ${LATEST_TAG:1} + 1 ))
-          echo "Next version: v$NEXT_VERSION"
-          echo "next_version=v$NEXT_VERSION" >> $GITHUB_ENV
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
+          echo "export PATH=\$HOME/bin:\$PATH" >> $GITHUB_ENV
+
+      - name: Get or create an OCIR repository
+        uses: oracle-actions/get-ocir-repository@v1.3.0
+        id: get-ocir-repository
+        with:
+          name: cicd
+          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
+
+      - name: Log into OCIR with Auth Token
+        uses: oracle-actions/login-ocir@v1.3.0
+        with:
+          auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Determine new version tag
+        id: determine-version
+        run: |
+          if [ -f .version ]; then
+            VERSION=$(cat .version)
+            echo "Current version: $VERSION"
+          else
+            VERSION="v1.0.0"
+            echo "No version file found. Starting with version: $VERSION"
+          fi
+          BASE_VERSION=$(echo $VERSION | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "Next version: $NEW_VERSION"
+          echo $NEW_VERSION > .version
+          echo "::set-output name=version::$NEW_VERSION"
+
+      - name: Commit version file
+        run: |
+          git config --local user.name "harishsp1996"
+          git config --local user.email "harish.sp.4196@gmail.com"
+          git add .version
+          git commit -m "Update version to ${{ steps.determine-version.outputs.version }}"
+          git push
+        env:
+          haish_GITHUB_TOKEN: ${{ secrets.haish_GITHUB_TOKEN }}
 
       - name: Build Docker image
-        uses: docker/build-push-action@v6
-        with:
-          platforms: linux/arm64
-          context: .
-          file: Dockerfile
-          tags: |
-            ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
-            ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:${{ env.next_version }}
-          push: false
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Push Docker Image to Oracle Cloud Registry
         run: |
-          docker push ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
-          docker push ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:${{ env.next_version }}
+          VERSION=${{ steps.determine-version.outputs.version }}
+          docker build -t myapp:$VERSION .
+          docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+
+      - name: Push Docker image to OCIR with versioning
+        run: |
+          VERSION=${{ steps.determine-version.outputs.version }}
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+
+      - name: Delete existing container instance
+        run: |
+          INSTANCE_ID=$(oci compute instance list --compartment-id $OCI_COMPARTMENT_OCID \
+            --display-name "my-container-instance" \
+            --query "data[0].id" --raw-output)
+          if [ -n "$INSTANCE_ID" ]; then
+            echo "Deleting existing container instance with ID: $INSTANCE_ID"
+            oci compute instance terminate --instance-id $INSTANCE_ID --force --wait-for-state TERMINATED
+          else
+            echo "No existing container instance found."
+          fi
+
+      - name: Create new container instance with Auth Token
+        id: create-instance
+        run: |
+          VERSION=${{ steps.determine-version.outputs.version }}
+          NEW_INSTANCE=$(oci compute instance launch --availability-domain "Your-AD" \
+            --compartment-id $OCI_COMPARTMENT_OCID \
+            --shape "VM.Standard.E2.1" \
+            --display-name "my-container-instance" \
+            --source-details "{\"sourceType\": \"image\", \"imageId\": \"${{ secrets.OCIR_REGISTRY }}/cicd:$VERSION\"}" \
+            --vnics '[{"subnetId": "Your-Subnet-ID", "privateIp": "192.1.2.3"}]' \
+            --query "data.id" --raw-output)
+          echo "New container instance ID: $NEW_INSTANCE"
+          echo "::set-output name=new_instance_id::$NEW_INSTANCE"
