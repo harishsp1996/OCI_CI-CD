@@ -26,8 +26,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up OCI CLI using Oracle Action
-        uses: oracle-actions/setup-oci-cli@v1.3.1
+      - name: Set up OCI CLI
+        uses: oracle-actions/oci-cli-action@v1.0.0  # Corrected action for OCI CLI setup
         with:
           oci_key_content: ${{ secrets.OCI_CLI_KEY_CONTENT }}
           oci_fingerprint: ${{ secrets.OCI_CLI_FINGERPRINT }}
