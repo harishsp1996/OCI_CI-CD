@@ -16,7 +16,7 @@ jobs:
       OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
       OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Ensure this is set in your repository secrets
