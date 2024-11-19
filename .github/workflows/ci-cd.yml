@@ -1,4 +1,4 @@
-name: Build, Tag, Push Docker Image, and Deploy OCI Container with Terraform
+name: Build, Tag, Push Docker Image, and Manage OCI Container
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
       - main
 
 jobs:
-  build-publish-deploy:
-    name: Build, Push Docker Image, and Deploy OCI Container with Terraform
+  build-publish-manage:
+    name: Build, Push Docker Image, and Manage OCI Container
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,33 +26,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Terraform
-        uses: hashicorp/setup-terraform@v1
-        with:
-          terraform_version: 1.5.0  # Specify the desired Terraform version
-
-      - name: Configure Terraform with OCI credentials
+      - name: Install OCI CLI
         run: |
-          echo "provider \"oci\" {
-            user = \"${{ secrets.OCI_CLI_USER }}\"
-            fingerprint = \"${{ secrets.OCI_CLI_FINGERPRINT }}\"
-            key_file = \"${{ secrets.OCI_CLI_KEY_CONTENT }}\"
-            tenancy_ocid = \"${{ secrets.OCI_TENANCY }}\"
-            region = \"${{ secrets.OCI_CLI_REGION }}\"
-            compartment_id = \"${{ secrets.OCI_COMPARTMENT_OCID }}\"
-          }" > provider.tf
-          
-      - name: Initialize Terraform
-        run: |
-          terraform init
-
-      - name: Plan Terraform Deployment
-        run: |
-          terraform plan
-
-      - name: Apply Terraform Configuration to Provision OCI Resources
-        run: |
-          terraform apply -auto-approve
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
+          echo "export PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
+          echo "OCI CLI installed successfully."
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
@@ -108,25 +86,22 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete existing container instance (if exists)
-        run: |
-          INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "my-container-instance" \
-            --query "data[0].id" --raw-output)
-          if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting existing container instance with ID: $INSTANCE_ID"
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-            echo "Existing container instance deleted."
-          else
-            echo "No existing container instance found."
-          fi
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 1.5.0  # Specify your desired Terraform version
 
-      - name: Create new container instance with the new image
+      - name: Initialize Terraform
         run: |
-          VERSION="${{ env.VERSION }}"
-          echo "Creating new container instance with image: ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-          NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "my-container-instance" \
-            --container-configs '[{"image":"${{ steps.get-ocir-repository.outputs.repo_path }}:'"$VERSION"'"}]' \
-            --query "data.id" --raw-output)
-          echo "New container instance ID: $NEW_INSTANCE"
+          terraform init
+
+      - name: Apply Terraform Configuration to Provision OCI Resources
+        run: |
+          terraform apply -auto-approve
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
