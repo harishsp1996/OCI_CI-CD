@@ -2,23 +2,32 @@ steps:
   - name: Check out repository
     uses: actions/checkout@v2
 
-  - name: Set up OCI CLI
+  - name: Install OCI CLI
     run: |
-      echo "Checking if OCI CLI is available..."
-      which oci || { echo "OCI CLI is not available."; exit 1; }
+      echo "Installing OCI CLI..."
+      curl -L https://github.com/oracle/oci-cli/releases/download/v3.23.0/oci-cli-linux.zip -o oci-cli-linux.zip
+      unzip oci-cli-linux.zip -d oci-cli
+      ./oci-cli/install/install.sh --install-dir=/home/runner
 
-  - name: Debug OCI CLI installation
+  - name: Verify OCI CLI installation
     run: |
-      echo "Listing files in /home/runner/bin:"
+      echo "Checking if OCI CLI is installed correctly..."
+      which oci
+      echo "OCI CLI location:"
       ls -la /home/runner/bin
-      echo "Checking OCI binary location:"
+      echo "Checking OCI binary:"
       which oci
+      echo "OCI CLI version:"
+      /home/runner/bin/oci --version
 
-  - name: Ensure OCI CLI is in PATH
+  - name: Debug OCI CLI path and environment
     run: |
-      export PATH=$HOME/bin:$PATH
-      echo "OCI CLI Path: $PATH"
-      which oci
+      echo "Current PATH: $PATH"
+      echo "OCI CLI location (after install): $(which oci)"
+      echo "List files in /home/runner/bin:"
+      ls -la /home/runner/bin
+      echo "Attempting to run OCI CLI version:"
+      /home/runner/bin/oci --version
 
   - name: Delete existing container instance
     run: |
