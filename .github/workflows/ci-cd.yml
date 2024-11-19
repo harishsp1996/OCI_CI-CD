@@ -73,7 +73,8 @@ jobs:
 
       - name: Build Docker image
         run: |
-          VERSION=${{ steps.determine-version.outputs.version }}
+          VERSION="${{ steps.determine-version.outputs.version }}"
+          echo "VERSION: $VERSION"
           docker buildx build --platform linux/amd64 -t cicd:$VERSION .
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
