@@ -1,59 +1,70 @@
-steps:
-  - name: Check out repository
-    uses: actions/checkout@v2
+name: CI/CD Pipeline
 
-  - name: Install OCI CLI
-    run: |
-      echo "Installing OCI CLI..."
-      curl -L https://github.com/oracle/oci-cli/releases/download/v3.23.0/oci-cli-linux.zip -o oci-cli-linux.zip
-      unzip oci-cli-linux.zip -d oci-cli
-      ./oci-cli/install/install.sh --install-dir=/home/runner
+on:
+  push:
+    branches:
+      - main
 
-  - name: Verify OCI CLI installation
-    run: |
-      echo "Checking if OCI CLI is installed correctly..."
-      which oci
-      echo "OCI CLI location:"
-      ls -la /home/runner/bin
-      echo "Checking OCI binary:"
-      which oci
-      echo "OCI CLI version:"
-      /home/runner/bin/oci --version
+jobs:
+  install_and_delete_container_instance:
+    runs-on: ubuntu-latest
 
-  - name: Debug OCI CLI path and environment
-    run: |
-      echo "Current PATH: $PATH"
-      echo "OCI CLI location (after install): $(which oci)"
-      echo "List files in /home/runner/bin:"
-      ls -la /home/runner/bin
-      echo "Attempting to run OCI CLI version:"
-      /home/runner/bin/oci --version
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
 
-  - name: Delete existing container instance
-    run: |
-      echo "Verifying OCI CLI before execution..."
-      which oci || { echo "OCI CLI is not available."; exit 1; }
-      INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
-        --display-name "my-container-instance" \
-        --query "data[0].id" --raw-output)
-      if [ -n "$INSTANCE_ID" ]; then
-        echo "Deleting existing container instance with ID: $INSTANCE_ID"
-        oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-      else
-        echo "No existing container instance found."
-      fi
-    shell: /usr/bin/bash -e {0}
-    env:
-      OCI_CLI_USER: ***
-      OCI_CLI_TENANCY: ***
-      OCI_CLI_FINGERPRINT: ***
-      OCI_CLI_KEY_CONTENT: ***
-      OCI_CLI_REGION: ***
-      OCI_COMPARTMENT_OCID: ***
-      OCIR_REGISTRY: ***
-      OCI_AUTH_TOKEN: ***
-      GITHUB_TOKEN: ***
+      - name: Install OCI CLI
+        run: |
+          echo "Installing OCI CLI..."
+          curl -L https://github.com/oracle/oci-cli/releases/download/v3.23.0/oci-cli-linux.zip -o oci-cli-linux.zip
+          unzip oci-cli-linux.zip -d oci-cli
+          ./oci-cli/install/install.sh --install-dir=/home/runner
 
-  - name: Cleanup
-    run: |
-      echo "Cleaning up..."
+      - name: Verify OCI CLI installation
+        run: |
+          echo "Checking if OCI CLI is installed correctly..."
+          which oci
+          echo "OCI CLI location:"
+          ls -la /home/runner/bin
+          echo "Checking OCI binary:"
+          which oci
+          echo "OCI CLI version:"
+          /home/runner/bin/oci --version
+
+      - name: Debug OCI CLI path and environment
+        run: |
+          echo "Current PATH: $PATH"
+          echo "OCI CLI location (after install): $(which oci)"
+          echo "List files in /home/runner/bin:"
+          ls -la /home/runner/bin
+          echo "Attempting to run OCI CLI version:"
+          /home/runner/bin/oci --version
+
+      - name: Delete existing container instance
+        run: |
+          echo "Verifying OCI CLI before execution..."
+          which oci || { echo "OCI CLI is not available."; exit 1; }
+          INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
+            --display-name "my-container-instance" \
+            --query "data[0].id" --raw-output)
+          if [ -n "$INSTANCE_ID" ]; then
+            echo "Deleting existing container instance with ID: $INSTANCE_ID"
+            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+          else
+            echo "No existing container instance found."
+          fi
+        shell: /usr/bin/bash -e {0}
+        env:
+          OCI_CLI_USER: ***
+          OCI_CLI_TENANCY: ***
+          OCI_CLI_FINGERPRINT: ***
+          OCI_CLI_KEY_CONTENT: ***
+          OCI_CLI_REGION: ***
+          OCI_COMPARTMENT_OCID: ***
+          OCIR_REGISTRY: ***
+          OCI_AUTH_TOKEN: ***
+          GITHUB_TOKEN: ***
+
+      - name: Cleanup
+        run: |
+          echo "Cleaning up..."
