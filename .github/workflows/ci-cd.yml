@@ -31,7 +31,7 @@ jobs:
           curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
           echo "export PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
           source $GITHUB_ENV  # Ensure the new PATH is sourced
-          # Check if OCI CLI is installed and available in PATH
+          # Verify that the OCI CLI is available
           which oci || { echo "OCI CLI installation failed."; exit 1; }
           echo "OCI CLI installed successfully."
 
@@ -91,6 +91,8 @@ jobs:
 
       - name: Delete existing container instance
         run: |
+          # Verify that the OCI CLI is available before executing the command
+          which oci || { echo "OCI CLI is not available."; exit 1; }
           INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "my-container-instance" \
             --query "data[0].id" --raw-output)
@@ -103,6 +105,8 @@ jobs:
 
       - name: Create new container instance
         run: |
+          # Verify that the OCI CLI is available before executing the command
+          which oci || { echo "OCI CLI is not available."; exit 1; }
           VERSION="${{ env.VERSION }}"
           NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "my-container-instance" \
