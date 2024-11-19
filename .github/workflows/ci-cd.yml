@@ -1,4 +1,4 @@
-name: Build, Tag, Push Docker Image, and Manage OCI Container
+name: Build, Tag, and Push Docker Image with Versioning
 
 on:
   push:
@@ -6,11 +6,11 @@ on:
       - main
 
 jobs:
-  build-publish-manage:
-    name: Build, Push Docker Image, and Manage OCI Container
+  build-and-publish:
+    name: Build and Push Docker Image to OCIR
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write  # Set write permissions for the GITHUB_TOKEN
     env:
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY }}
@@ -19,8 +19,7 @@ jobs:
       OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
       OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}  # Using Auth Token for both OCI CLI & OCIR
-      haish_GITHUB_TOKEN: ${{ secrets.haish_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Ensure this is set in your repository secrets
 
     steps:
       - name: Checkout Code
@@ -33,7 +32,7 @@ jobs:
           name: cicd
           compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
 
-      - name: Log into OCIR with Auth Token
+      - name: Log into OCIR
         uses: oracle-actions/login-ocir@v1.3.0
         with:
           auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
@@ -55,7 +54,6 @@ jobs:
           echo "Next version: $NEW_VERSION"
           echo $NEW_VERSION > .version
           echo "::set-output name=version::$NEW_VERSION"
-
       - name: Commit version file
         run: |
           git config --local user.name "harishsp1996"
@@ -64,7 +62,7 @@ jobs:
           git commit -m "Update version to ${{ steps.determine-version.outputs.version }}"
           git push
         env:
-          haish_GITHUB_TOKEN: ${{ secrets.haish_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Use the GitHub token for authentication
 
       - name: Build Docker image
         run: |
@@ -72,35 +70,8 @@ jobs:
           docker build -t myapp:$VERSION .
           docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
       - name: Push Docker image to OCIR with versioning
         run: |
           VERSION=${{ steps.determine-version.outputs.version }}
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Delete existing container instance
-        run: |
-          INSTANCE_ID=$(oci compute instance list --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "my-container-instance" \
-            --query "data[0].id" --raw-output)
-          if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting existing container instance with ID: $INSTANCE_ID"
-            oci compute instance terminate --instance-id $INSTANCE_ID --force --wait-for-state TERMINATED
-          else
-            echo "No existing container instance found."
-          fi
-
-      - name: Create new container instance with Auth Token
-        id: create-instance
-        run: |
-          VERSION=${{ steps.determine-version.outputs.version }}
-          NEW_INSTANCE=$(oci compute instance launch --availability-domain "Your-AD" \
-            --compartment-id $OCI_COMPARTMENT_OCID \
-            --shape "VM.Standard.E2.1" \
-            --display-name "my-container-instance" \
-            --source-details "{\"sourceType\": \"image\", \"imageId\": \"${{ secrets.OCIR_REGISTRY }}/cicd:$VERSION\"}" \
-            --vnics '[{"subnetId": "Your-Subnet-ID", "privateIp": "192.1.2.3"}]' \
-            --query "data.id" --raw-output)
-          echo "New container instance ID: $NEW_INSTANCE"
-          echo "::set-output name=new_instance_id::$NEW_INSTANCE"
