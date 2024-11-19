@@ -31,6 +31,8 @@ jobs:
           curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
           echo "export PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
           source $GITHUB_ENV  # Ensure the new PATH is sourced
+          # Check if OCI CLI is installed and available in PATH
+          which oci || { echo "OCI CLI installation failed."; exit 1; }
           echo "OCI CLI installed successfully."
 
       - name: Get or create an OCIR repository
@@ -45,7 +47,47 @@ jobs:
         with:
           auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
 
-      # Other steps like version determination, Docker build, push, etc.
+      - name: Determine new version tag
+        id: determine-version
+        run: |
+          if [ -f .version ]; then
+            VERSION=$(cat .version)
+            echo "Current version: $VERSION"
+          else
+            VERSION="v1.0.0"
+            echo "No version file found. Starting with version: $VERSION"
+          fi
+          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "Next version: $NEW_VERSION"
+          echo "$NEW_VERSION" > .version
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
+      - name: Commit version file
+        run: |
+          git config --local user.name "your-username"
+          git config --local user.email "your-email@example.com"
+          git add .version
+          git commit -m "Update version to $VERSION"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          VERSION="${{ env.VERSION }}"
+          echo "VERSION: $VERSION"
+          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+
+      - name: Push Docker image to OCIR
+        run: |
+          VERSION="${{ env.VERSION }}"
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
       - name: Delete existing container instance
         run: |
