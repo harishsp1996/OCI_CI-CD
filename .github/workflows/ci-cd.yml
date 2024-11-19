@@ -17,6 +17,11 @@ jobs:
         run: |
           echo "Installing OCI CLI..."
           curl -L https://github.com/oracle/oci-cli/releases/download/v3.23.0/oci-cli-linux.zip -o oci-cli-linux.zip
+          # Check if the file exists
+          if [ ! -f oci-cli-linux.zip ]; then
+            echo "oci-cli-linux.zip download failed"
+            exit 1
+          fi
           unzip oci-cli-linux.zip -d oci-cli
           ./oci-cli/install/install.sh --install-dir=/home/runner
 
