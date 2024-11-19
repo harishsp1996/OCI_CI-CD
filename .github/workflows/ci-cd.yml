@@ -55,15 +55,15 @@ jobs:
           fi
         shell: /usr/bin/bash -e {0}
         env:
-          OCI_CLI_USER: ***
-          OCI_CLI_TENANCY: ***
-          OCI_CLI_FINGERPRINT: ***
-          OCI_CLI_KEY_CONTENT: ***
-          OCI_CLI_REGION: ***
-          OCI_COMPARTMENT_OCID: ***
-          OCIR_REGISTRY: ***
-          OCI_AUTH_TOKEN: ***
-          GITHUB_TOKEN: ***
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
+          OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cleanup
         run: |
