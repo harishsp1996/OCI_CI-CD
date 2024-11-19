@@ -36,6 +36,7 @@ jobs:
           which pip
           which oci
           echo "OCI CLI and pip locations verified"
+          exec -l $SHELL  # Restart shell to apply path changes
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
