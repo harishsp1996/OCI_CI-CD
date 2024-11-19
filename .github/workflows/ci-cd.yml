@@ -47,7 +47,7 @@ jobs:
         id: determine-version
         run: |
           if [ -f .version ]; then
-            VERSION=$(cat .version)
+            VERSION=$(cat .version | tr -d '[:space:]')
             echo "Current version: $VERSION"
           else
             VERSION="v1.0.0"
@@ -60,30 +60,33 @@ jobs:
           echo "Next version: $NEW_VERSION"
           echo "$NEW_VERSION" > .version
           echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "::set-output name=version::$NEW_VERSION"
 
       - name: Commit version file
         run: |
           git config --local user.name "harishsp1996"
           git config --local user.email "harish.sp.4196@gmail.com"
           git add .version
-          git commit -m "Update version to $VERSION"
+          git commit -m "Update version to ${{ env.VERSION }}"
           git push
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.VERSION }}
 
       - name: Build Docker image
         run: |
-          VERSION="${{ steps.determine-version.outputs.version }}"
-          echo "VERSION: $VERSION"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
+          echo "VERSION: ${{ env.VERSION }}"
+          docker buildx build --platform linux/amd64 -t cicd:${{ env.VERSION }} .
+          docker tag cicd:${{ env.VERSION }} ${{ steps.get-ocir-repository.outputs.repo_path }}:${{ env.VERSION }}
+          docker tag cicd:${{ env.VERSION }} ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+        env:
+          VERSION: ${{ env.VERSION }}
 
       - name: Push Docker image to OCIR
         run: |
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:${{ env.VERSION }}
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+        env:
+          VERSION: ${{ env.VERSION }}
 
       - name: Delete existing container instance
         run: |
@@ -99,10 +102,9 @@ jobs:
 
       - name: Create new container instance
         run: |
-          NEW_INSTANCE=$(oci compute instance launch --availability-domain "Your-AD" \
+          oci compute instance launch --availability-domain "Your-AD" \
             --compartment-id $OCI_COMPARTMENT_OCID \
             --shape "VM.Standard.E2.1" \
             --display-name "my-container-instance" \
-            --source-details "{\"sourceType\": \"image\", \"imageId\": \"${{ secrets.OCIR_REGISTRY }}/cicd:$VERSION\"}" \
-            --query "data.id" --raw-output)
-          echo "New container instance ID: $NEW_INSTANCE"
+            --source-details "{\"sourceType\": \"image\", \"imageId\": \"${{ steps.get-ocir-repository.outputs.repo_path }}:${{ env.VERSION }}\"}" \
+            --query "data.id" --raw-output
