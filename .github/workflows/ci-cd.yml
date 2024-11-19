@@ -29,8 +29,10 @@ jobs:
       - name: Install OCI CLI
         run: |
           curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
-          echo "export PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
           echo "OCI CLI installed successfully."
+          echo "export PATH=\$HOME/bin:\$PATH" >> $GITHUB_ENV
+          source $GITHUB_ENV
+          echo "OCI CLI path set"
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
