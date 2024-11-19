@@ -101,8 +101,13 @@ jobs:
       - name: Create new container instance
         run: |
           VERSION="${{ env.VERSION }}"
-          NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id $OCI_COMPARTMENT_OCID \
+          echo "Creating new container instance with image tag: $VERSION"
+          
+          # Ensure the image path is correctly interpolated
+          NEW_INSTANCE=$(oci container-instances container-instance create \
+            --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "my-container-instance" \
-            --container-configs '[{"image":"${{ steps.get-ocir-repository.outputs.repo_path }}:'"$VERSION"'"}]' \
+            --container-configs "[{\"image\":\"${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION\"}]" \
             --query "data.id" --raw-output)
+          
           echo "New container instance ID: $NEW_INSTANCE"
