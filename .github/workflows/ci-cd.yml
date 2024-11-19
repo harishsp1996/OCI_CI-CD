@@ -27,25 +27,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up OCI CLI
-        uses: oracle-actions/oci-cli-action@v1.0.0  # Corrected action for OCI CLI setup
+        uses: oracle-actions/run-oci-cli-command@v1.3.2  # Corrected action to set up OCI CLI
         with:
-          oci_key_content: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          oci_fingerprint: ${{ secrets.OCI_CLI_FINGERPRINT }}
-          oci_tenancy: ${{ secrets.OCI_CLI_TENANCY }}
-          oci_user: ${{ secrets.OCI_CLI_USER }}
-          oci_region: ${{ secrets.OCI_CLI_REGION }}
+          command: 'oci --version'
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
 
       - name: Get or create an OCIR repository
-        uses: oracle-actions/get-ocir-repository@v1.3.0
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
         id: get-ocir-repository
         with:
-          name: cicd
-          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          command: 'oci os bucket list --compartment-id $OCI_COMPARTMENT_OCID'
+          query: 'data[0].name'
 
       - name: Log into OCIR
-        uses: oracle-actions/login-ocir@v1.3.0
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
         with:
-          auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
+          command: 'oci iam policy create --compartment-id $OCI_COMPARTMENT_OCID --name "oci-cli-policy" --statements "[\"oci:compute:instance:*\"]"'
+        env:
+          OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
 
       - name: Determine new version tag
         id: determine-version
