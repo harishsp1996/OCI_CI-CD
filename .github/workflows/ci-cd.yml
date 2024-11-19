@@ -75,8 +75,8 @@ jobs:
         run: |
           VERSION=${{ steps.determine-version.outputs.version }}
           docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
 
       - name: Push Docker image to OCIR
