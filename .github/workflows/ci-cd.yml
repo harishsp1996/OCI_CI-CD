@@ -86,22 +86,7 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v1
+      - name: Run OCI CLI Command - List Compute Instances
+        uses: oracle/oci-actions/run-oci-cli-command@v1.3.2
         with:
-          terraform_version: 1.5.0  # Specify your desired Terraform version
-
-      - name: Initialize Terraform
-        run: |
-          terraform init
-
-      - name: Apply Terraform Configuration to Provision OCI Resources
-        run: |
-          terraform apply -auto-approve
-        env:
-          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          command: 'oci compute instance list --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }}'
