@@ -26,22 +26,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install OCI CLI
-        run: |
-          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
-          echo "OCI CLI installed successfully."
-          echo "export PATH=\$HOME/bin:\$PATH" >> $GITHUB_ENV
-          source $GITHUB_ENV
-          echo "OCI CLI path set"
-          which oci
-          echo "OCI CLI location verified"
-          exec -l $SHELL  # Restart shell to apply path changes
-
-      - name: Verify OCI CLI Installation
-        run: |
-          echo "Verifying OCI CLI installation"
-          which oci
-          oci --version
+      - name: Set up OCI CLI using Oracle Action
+        uses: oracle-actions/setup-oci-cli@v1.3.1
+        with:
+          oci_key_content: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          oci_fingerprint: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          oci_tenancy: ${{ secrets.OCI_CLI_TENANCY }}
+          oci_user: ${{ secrets.OCI_CLI_USER }}
+          oci_region: ${{ secrets.OCI_CLI_REGION }}
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
@@ -97,24 +89,37 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete existing container instance
+      - name: Check for existing container instance
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        id: check-instance
+        with:
+          command: 'oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID --display-name "my-container-instance" --query "data[0].id" --raw-output'
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+        continue-on-error: true
+
+      - name: Confirm and Delete Existing Container Instance
         run: |
-          echo "Verifying OCI CLI availability"
-          which oci
-          INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "my-container-instance" \
-            --query "data[0].id" --raw-output)
+          INSTANCE_ID="${{ steps.check-instance.outputs.raw_output }}"
           if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting existing container instance with ID: $INSTANCE_ID"
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            echo "Existing container instance found with ID: $INSTANCE_ID"
+            read -p "Do you want to delete this container instance? (y/n): " CONFIRM
+            if [ "$CONFIRM" == "y" ]; then
+              echo "Deleting existing container instance with ID: $INSTANCE_ID"
+              oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            else
+              echo "Skipping deletion. Moving to new container creation."
+            fi
           else
             echo "No existing container instance found."
           fi
 
       - name: Create new container instance
         run: |
-          echo "Verifying OCI CLI availability"
-          which oci
           VERSION="${{ env.VERSION }}"
           NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "my-container-instance" \
