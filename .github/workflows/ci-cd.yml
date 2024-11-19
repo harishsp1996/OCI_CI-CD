@@ -21,6 +21,8 @@ jobs:
       OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
       OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      LOGICAL_AD: ${{ secrets.OCI_AVAILABILITY_DOMAIN }}
+      SUBNET_OCID: ${{ secrets.OCI_SUBNET_OCID }}
 
     steps:
       - name: Checkout Code
@@ -75,7 +77,6 @@ jobs:
       - name: Build Docker image
         run: |
           VERSION="${{ env.VERSION }}"
-          echo "VERSION: $VERSION"
           docker buildx build --platform linux/amd64 -t cicd:$VERSION .
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
@@ -100,14 +101,31 @@ jobs:
 
       - name: Create new container instance
         run: |
+          COMPARTMENT_OCID="${{ secrets.OCI_COMPARTMENT_OCID }}"
+          LOGICAL_AD="${{ secrets.OCI_AVAILABILITY_DOMAIN }}"
+          CI_SHAPE="CI.Standard.E4.Flex"
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          VNIC_JSON="[{'subnetId': '${{ secrets.OCI_SUBNET_OCID }}'}]"
+
           VERSION="${{ env.VERSION }}"
-          echo "Creating new container instance with image tag: $VERSION"
-          
-          # Ensure the image path is correctly interpolated
+          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+          CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
+
+          echo "Creating new container instance with image: $IMAGE_PATH"
           NEW_INSTANCE=$(oci container-instances container-instance create \
-            --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "my-container-instance" \
-            --container-configs "[{\"image\":\"${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION\"}]" \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --availability-domain "$LOGICAL_AD" \
+            --shape "$CI_SHAPE" \
+            --shape-config "$SHAPE_CONFIG_JSON" \
+            --containers "$CONTAINER_JSON" \
+            --vnics "$VNIC_JSON" \
             --query "data.id" --raw-output)
-          
-          echo "New container instance ID: $NEW_INSTANCE"
+
+          echo "New container instance created with ID: $NEW_INSTANCE"
+
+      - name: Start container instance
+        run: |
+          echo "Starting container instance..."
+          oci container-instances container-instance start \
+            --container-instance-id "$NEW_INSTANCE"
+          echo "Container instance started successfully."
