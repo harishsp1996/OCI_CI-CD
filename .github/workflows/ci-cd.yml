@@ -33,6 +33,9 @@ jobs:
           echo "export PATH=\$HOME/bin:\$PATH" >> $GITHUB_ENV
           source $GITHUB_ENV
           echo "OCI CLI path set"
+          which pip
+          which oci
+          echo "OCI CLI and pip locations verified"
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
