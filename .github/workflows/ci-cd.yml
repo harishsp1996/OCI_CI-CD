@@ -63,8 +63,8 @@ jobs:
 
       - name: Commit version file
         run: |
-          git config --local user.name "sivaiahkongala"
-          git config --local user.email "sivaiahkongala@gmail.com"
+          git config --local user.name "harishsp1996"
+          git config --local user.email "harish.sp.4196@gmail.com"
           git add .version
           git commit -m "Update version to $VERSION"
           git push
@@ -74,7 +74,7 @@ jobs:
       - name: Build Docker image
         run: |
           VERSION=${{ steps.determine-version.outputs.version }}
-          docker buildx build --platform linux/amd64 -t myapp:$VERSION .
+          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
           docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker tag myapp:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
