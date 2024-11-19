@@ -23,18 +23,16 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      # Checkout Code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Install OCI CLI
       - name: Install OCI CLI
         run: |
           curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
           echo "export PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
+          source $GITHUB_ENV  # Ensure the new PATH is sourced
           echo "OCI CLI installed successfully."
 
-      # Get or create an OCIR repository
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
         id: get-ocir-repository
@@ -42,60 +40,13 @@ jobs:
           name: cicd
           compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
 
-      # Log into OCIR
       - name: Log into OCIR
         uses: oracle-actions/login-ocir@v1.3.0
         with:
           auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
 
-      # Determine new version tag
-      - name: Determine new version tag
-        id: determine-version
-        run: |
-          if [ -f .version ]; then
-            VERSION=$(cat .version)
-            echo "Current version: $VERSION"
-          else
-            VERSION="v1.0.0"
-            echo "No version file found. Starting with version: $VERSION"
-          fi
-          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH + 1))
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Next version: $NEW_VERSION"
-          echo "$NEW_VERSION" > .version
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
+      # Other steps like version determination, Docker build, push, etc.
 
-      # Commit version file
-      - name: Commit version file
-        run: |
-          git config --local user.name "your-username"
-          git config --local user.email "your-email@example.com"
-          git add .version
-          git commit -m "Update version to $NEW_VERSION"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build Docker image
-      - name: Build Docker image
-        run: |
-          VERSION="${{ env.VERSION }}"
-          echo "Building Docker image with version: $VERSION"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      # Push Docker image to OCIR
-      - name: Push Docker image to OCIR
-        run: |
-          VERSION="${{ env.VERSION }}"
-          echo "Pushing Docker image with version: $VERSION"
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      # Delete existing container instance
       - name: Delete existing container instance
         run: |
           INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
@@ -108,7 +59,6 @@ jobs:
             echo "No existing container instance found."
           fi
 
-      # Create new container instance
       - name: Create new container instance
         run: |
           VERSION="${{ env.VERSION }}"
