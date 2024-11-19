@@ -17,12 +17,12 @@ jobs:
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      OCI_COMPARTMENT_OCID: ${{ secrets.COMPARTMENT_OCID }}
       OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
       OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
+      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      LOGICAL_AD: ${{ secrets.OCI_AVAILABILITY_DOMAIN }}
-      SUBNET_OCID: ${{ secrets.OCI_SUBNET_OCID }}
 
     steps:
       - name: Checkout Code
@@ -39,7 +39,7 @@ jobs:
         id: get-ocir-repository
         with:
           name: cicd
-          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          compartment: ${{ secrets.COMPARTMENT_OCID }}
 
       - name: Log into OCIR
         uses: oracle-actions/login-ocir@v1.3.0
@@ -77,6 +77,7 @@ jobs:
       - name: Build Docker image
         run: |
           VERSION="${{ env.VERSION }}"
+          echo "VERSION: $VERSION"
           docker buildx build --platform linux/amd64 -t cicd:$VERSION .
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
@@ -89,7 +90,8 @@ jobs:
 
       - name: Delete existing container instance
         run: |
-          INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
+          INSTANCE_ID=$(oci container-instances container-instance list \
+            --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "my-container-instance" \
             --query "data[0].id" --raw-output)
           if [ -n "$INSTANCE_ID" ]; then
@@ -101,31 +103,27 @@ jobs:
 
       - name: Create new container instance
         run: |
-          COMPARTMENT_OCID="${{ secrets.OCI_COMPARTMENT_OCID }}"
-          LOGICAL_AD="${{ secrets.OCI_AVAILABILITY_DOMAIN }}"
-          CI_SHAPE="CI.Standard.E4.Flex"
-          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
-          VNIC_JSON="[{'subnetId': '${{ secrets.OCI_SUBNET_OCID }}'}]"
-
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-          CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+          CONTAINER_JSON="[{
+            \"imageUrl\": \"$IMAGE_PATH\"
+          }]"
 
           echo "Creating new container instance with image: $IMAGE_PATH"
           NEW_INSTANCE=$(oci container-instances container-instance create \
-            --compartment-id "$COMPARTMENT_OCID" \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
             --availability-domain "$LOGICAL_AD" \
-            --shape "$CI_SHAPE" \
+            --shape "CI.Standard.E4.Flex" \
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON" \
             --query "data.id" --raw-output)
 
-          echo "New container instance created with ID: $NEW_INSTANCE"
+          if [ $? -ne 0 ]; then
+            echo "Failed to create container instance."
+            exit 1
+          fi
 
-      - name: Start container instance
-        run: |
-          echo "Starting container instance..."
-          oci container-instances container-instance start \
-            --container-instance-id "$NEW_INSTANCE"
-          echo "Container instance started successfully."
+          echo "New container instance created with ID: $NEW_INSTANCE"
