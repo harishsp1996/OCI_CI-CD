@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: Build, Tag, Push Docker Image, and Manage OCI Container
 
 on:
   push:
@@ -6,49 +6,85 @@ on:
       - main
 
 jobs:
-  install_and_delete_container_instance:
+  build-publish-manage:
+    name: Build, Push Docker Image, and Manage OCI Container
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
+      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v2
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Install OCI CLI
+      - name: Set up OCI CLI
+        uses: oracle-actions/setup-oci-cli@v1.2.1
+
+      - name: Get or create an OCIR repository
+        uses: oracle-actions/get-ocir-repository@v1.3.0
+        id: get-ocir-repository
+        with:
+          name: cicd
+          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
+
+      - name: Log into OCIR
+        uses: oracle-actions/login-ocir@v1.3.0
+        with:
+          auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Determine new version tag
+        id: determine-version
         run: |
-          echo "Installing OCI CLI..."
-          curl -L https://github.com/oracle/oci-cli/releases/download/v3.23.0/oci-cli-linux.zip -o oci-cli-linux.zip
-          # Check if the file exists
-          if [ ! -f oci-cli-linux.zip ]; then
-            echo "oci-cli-linux.zip download failed"
-            exit 1
+          if [ -f .version ]; then
+            VERSION=$(cat .version)
+            echo "Current version: $VERSION"
+          else
+            VERSION="v1.0.0"
+            echo "No version file found. Starting with version: $VERSION"
           fi
-          unzip oci-cli-linux.zip -d oci-cli
-          ./oci-cli/install/install.sh --install-dir=/home/runner
+          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "Next version: $NEW_VERSION"
+          echo "$NEW_VERSION" > .version
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
-      - name: Verify OCI CLI installation
+      - name: Commit version file
         run: |
-          echo "Checking if OCI CLI is installed correctly..."
-          which oci
-          echo "OCI CLI location:"
-          ls -la /home/runner/bin
-          echo "Checking OCI binary:"
-          which oci
-          echo "OCI CLI version:"
-          /home/runner/bin/oci --version
+          git config --local user.name "your-username"
+          git config --local user.email "your-email@example.com"
+          git add .version
+          git commit -m "Update version to $VERSION"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Debug OCI CLI path and environment
+      - name: Build Docker image
         run: |
-          echo "Current PATH: $PATH"
-          echo "OCI CLI location (after install): $(which oci)"
-          echo "List files in /home/runner/bin:"
-          ls -la /home/runner/bin
-          echo "Attempting to run OCI CLI version:"
-          /home/runner/bin/oci --version
+          VERSION="${{ env.VERSION }}"
+          echo "VERSION: $VERSION"
+          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+
+      - name: Push Docker image to OCIR
+        run: |
+          VERSION="${{ env.VERSION }}"
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
       - name: Delete existing container instance
         run: |
-          echo "Verifying OCI CLI before execution..."
-          which oci || { echo "OCI CLI is not available."; exit 1; }
           INSTANCE_ID=$(oci container-instances container-instance list --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "my-container-instance" \
             --query "data[0].id" --raw-output)
@@ -58,18 +94,12 @@ jobs:
           else
             echo "No existing container instance found."
           fi
-        shell: /usr/bin/bash -e {0}
-        env:
-          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-          OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-          OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cleanup
+      - name: Create new container instance
         run: |
-          echo "Cleaning up..."
+          VERSION="${{ env.VERSION }}"
+          NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id $OCI_COMPARTMENT_OCID \
+            --display-name "my-container-instance" \
+            --container-configs '[{"image":"${{ steps.get-ocir-repository.outputs.repo_path }}:'"$VERSION"'"}]' \
+            --query "data.id" --raw-output)
+          echo "New container instance ID: $NEW_INSTANCE"
