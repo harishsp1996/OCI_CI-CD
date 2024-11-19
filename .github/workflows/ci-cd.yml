@@ -35,6 +35,7 @@ jobs:
 
       - name: Verify OCI CLI availability
         run: |
+          echo "Checking if OCI CLI is available..."
           which oci || { echo "OCI CLI is not available."; exit 1; }
 
       - name: Get or create an OCIR repository
