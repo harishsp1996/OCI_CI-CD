@@ -132,38 +132,43 @@ jobs:
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON"
 
-    post:
-      always:
-        steps:
-          - name: Revert version file if build failed
-            if: failure() && env.VERSION && env.PREVIOUS_VERSION
-            run: |
-              echo "Reverting version file to previous version: ${{ env.PREVIOUS_VERSION }}"
-              echo "${{ env.PREVIOUS_VERSION }}" > .version
-              git config --local user.name "harishsp1996"
-              git config --local user.email "harish.sp.4196@gmail.com"
-              git add .version
-              git commit -m "Revert version to ${{ env.PREVIOUS_VERSION }}"
-              git push
-            env:
-              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  post-build:
+    name: Post-Build Cleanup
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-          - name: Send Failure Email Notification
-            if: failure()
-            run: |
-              echo "Build failed at step: ${{ github.step.name }}"
-              echo "Sending failure notification email..."
-              echo "Subject: Build Failed: ${{ github.step.name }}" > email.txt
-              echo "Build of version ${{ env.VERSION }} failed during step: ${{ github.step.name }}" >> email.txt
-              echo "" >> email.txt
-              echo "Check logs for more details." >> email.txt
-              sendmail "${{ secrets.NOTIFICATION_EMAIL }}" < email.txt
+      - name: Revert version file if build failed
+        if: failure()
+        run: |
+          echo "Reverting version file to previous version: ${{ env.PREVIOUS_VERSION }}"
+          echo "${{ env.PREVIOUS_VERSION }}" > .version
+          git config --local user.name "harishsp1996"
+          git config --local user.email "harish.sp.4196@gmail.com"
+          git add .version
+          git commit -m "Revert version to ${{ env.PREVIOUS_VERSION }}"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          - name: Send Success Email Notification
-            if: success()
-            run: |
-              echo "Build succeeded!"
-              echo "Sending success notification email..."
-              echo "Subject: Build Successful: Version ${{ env.VERSION }}" > email.txt
-              echo "Build of version ${{ env.VERSION }} completed successfully." >> email.txt
-              sendmail "${{ secrets.NOTIFICATION_EMAIL }}" < email.txt
+      - name: Send Failure Email Notification
+        if: failure()
+        run: |
+          echo "Build failed at step: ${{ github.step.name }}"
+          echo "Sending failure notification email..."
+          echo "Subject: Build Failed: ${{ github.step.name }}" > email.txt
+          echo "Build of version ${{ env.VERSION }} failed during step: ${{ github.step.name }}" >> email.txt
+          echo "" >> email.txt
+          echo "Check logs for more details." >> email.txt
+          sendmail "${{ secrets.NOTIFICATION_EMAIL }}" < email.txt
+
+      - name: Send Success Email Notification
+        if: success()
+        run: |
+          echo "Build succeeded!"
+          echo "Sending success notification email..."
+          echo "Subject: Build Successful: Version ${{ env.VERSION }}" > email.txt
+          echo "Build of version ${{ env.VERSION }} completed successfully." >> email.txt
+          sendmail "${{ secrets.NOTIFICATION_EMAIL }}" < email.txt
