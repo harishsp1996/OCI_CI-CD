@@ -23,6 +23,7 @@ jobs:
       LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
       SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
 
     steps:
       - name: Checkout Code
@@ -50,19 +51,18 @@ jobs:
         id: determine-version
         run: |
           if [ -f .version ]; then
-            VERSION=$(cat .version)
-            echo "Current version: $VERSION"
+            PREVIOUS_VERSION=$(cat .version)
+            echo "Previous version: $PREVIOUS_VERSION"
           else
-            VERSION="v1.0.0"
-            echo "No version file found. Starting with version: $VERSION"
+            PREVIOUS_VERSION="v1.0.0"
           fi
-          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
+          BASE_VERSION=$(echo "$PREVIOUS_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
           PATCH=$((PATCH + 1))
           NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Next version: $NEW_VERSION"
           echo "$NEW_VERSION" > .version
           echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "PREVIOUS_VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
 
       - name: Commit version file
         run: |
@@ -76,54 +76,78 @@ jobs:
 
       - name: Build Docker image
         run: |
-          VERSION="${{ env.VERSION }}"
-          echo "VERSION: $VERSION"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+          docker buildx build --platform linux/amd64 -t cicd:${{ env.VERSION }} .
+          docker tag cicd:${{ env.VERSION }} ${{ steps.get-ocir-repository.outputs.repo_path }}:${{ env.VERSION }}
+          docker tag cicd:${{ env.VERSION }} ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
       - name: Push Docker image to OCIR
         run: |
-          VERSION="${{ env.VERSION }}"
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:${{ env.VERSION }}
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete existing container instance
+      - name: Delete previous container instance
         run: |
+          PREVIOUS_INSTANCE_NAME="icsapplication-${{ env.PREVIOUS_VERSION }}"
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "my-container-instance" \
+            --display-name "$PREVIOUS_INSTANCE_NAME" \
             --query "data[0].id" --raw-output)
           if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting existing container instance with ID: $INSTANCE_ID"
+            echo "Deleting previous container instance with ID: $INSTANCE_ID"
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+
+            echo "Waiting for deletion to complete..."
+            while true; do
+              STATUS=$(oci container-instances container-instance get \
+                --container-instance-id "$INSTANCE_ID" \
+                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+              if [ "$STATUS" == "DELETED" ]; then
+                echo "Previous instance successfully deleted."
+                break
+              fi
+              echo "Current status: $STATUS. Retrying in 10 seconds..."
+              sleep 10
+            done
           else
-            echo "No existing container instance found."
+            echo "No container instance found with name: $PREVIOUS_INSTANCE_NAME"
           fi
 
       - name: Create new container instance
         run: |
-          VERSION="${{ env.VERSION }}"
-          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+          INSTANCE_NAME="icsapplication-${{ env.VERSION }}"
+          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:${{ env.VERSION }}"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
             \"imageUrl\": \"$IMAGE_PATH\"
           }]"
 
-          echo "Creating new container instance with image: $IMAGE_PATH"
-          NEW_INSTANCE=$(oci container-instances container-instance create \
+          echo "Creating new container instance with name: $INSTANCE_NAME"
+          oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --availability-domain "$LOGICAL_AD" \
+            --display-name "$INSTANCE_NAME" \
             --shape "CI.Standard.E4.Flex" \
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
-            --vnics "$VNIC_JSON" \
-            --query "data.id" --raw-output)
+            --vnics "$VNIC_JSON"
 
-          if [ $? -ne 0 ]; then
-            echo "Failed to create container instance."
-            exit 1
-          fi
+      - name: Send Failure Email Notification
+        if: failure()
+        run: |
+          echo "Build failed at step: ${{ github.step.name }}"
+          echo "Sending failure notification email..."
+          echo "Subject: Build Failed: ${{ github.step.name }}" > email.txt
+          echo "Build of version ${{ env.VERSION }} failed during step: ${{ github.step.name }}" >> email.txt
+          echo "" >> email.txt
+          echo "Check logs for more details." >> email.txt
+          sendmail "${{ secrets.NOTIFICATION_EMAIL }}" < email.txt
 
-          echo "New container instance created with ID: $NEW_INSTANCE"
+      - name: Send Success Email Notification
+        if: success()
+        run: |
+          echo "Build succeeded!"
+          echo "Sending success notification email..."
+          echo "Subject: Build Successful: Version ${{ env.VERSION }}" > email.txt
+          echo "Build of version ${{ env.VERSION }} completed successfully." >> email.txt
+          sendmail "${{ secrets.NOTIFICATION_EMAIL }}" < email.txt
