@@ -134,17 +134,17 @@ jobs:
           echo "New container instance created with ID: $NEW_INSTANCE"
           
       - name: Notify build success
+        if: success()
         run: |
           curl -X POST "https://notification.ap-mumbai-1.oci.oraclecloud.com/20181201/notifications/$OCI_NOTIFICATION_TOPIC_OCID/messages" \
           -H "Content-Type: application/json" \
           -d '{"message": "Build succeeded. New container instance created. Version: ${{ env.VERSION }}"}'
 
-    # Post Build Action: Revert Version if failure occurs
-    post:
-      - run: |
+      - name: Revert Version on Failure
+        if: failure()
+        run: |
           echo "Reverting version to previous version"
           PREVIOUS_VERSION=$(cat .previous_version)
           echo "$PREVIOUS_VERSION" > .version
           git commit -m "Revert to previous version $PREVIOUS_VERSION"
           git push
-        if: failure()
