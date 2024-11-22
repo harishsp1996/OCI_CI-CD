@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
     env:
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
@@ -24,7 +23,7 @@ jobs:
       LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
       SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}  # OCI Notification topic for emails
+      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
 
     steps:
       - name: Checkout Code
@@ -71,7 +70,7 @@ jobs:
           git config --local user.name "harishsp1996"
           git config --local user.email "harish.sp.4196@gmail.com"
           git add .version
-          git commit -m "Update version to $NEW_VERSION"
+          git commit -m "Update version to $VERSION"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,34 +89,32 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete previous container instance
+      - name: Delete previous container instance (based on previous version)
         run: |
           # Fetch the current version from the .version file
           CURRENT_VERSION=$(cat .version)
           echo "Current version: $CURRENT_VERSION"
-
+          
           # Calculate previous version (e.g., v1.0.1 -> v1.0.0)
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
           PATCH=$((PATCH - 1))  # Decrement the patch version to get previous version
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
           echo "Previous version: $PREVIOUS_VERSION"
-
+          
           # Build the previous version's container instance name
           PREVIOUS_INSTANCE_NAME="icsapplication-${PREVIOUS_VERSION}"
-
+          
           # Query OCI for the instance ID using the previous version name
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "$PREVIOUS_INSTANCE_NAME" \
-            --query "data[0].id" --raw-output)
+            --query "data[?display-name=='$PREVIOUS_INSTANCE_NAME'].id" \
+            --raw-output)
 
           if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting previous container instance with ID: $INSTANCE_ID"
-            
-            # Delete the previous container instance using its ID
+            echo "Found instance with ID: $INSTANCE_ID. Deleting previous container instance."
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-
+            
             # Wait until the deletion is complete
             echo "Waiting for the deletion to complete..."
             while true; do
@@ -126,9 +123,10 @@ jobs:
                 --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
               
               if [ "$STATUS" == "DELETED" ]; then
-                echo "Previous instance successfully deleted."
+                echo "Previous container instance deleted successfully."
                 break
               fi
+              
               echo "Current status: $STATUS. Retrying in 10 seconds..."
               sleep 10
             done
@@ -146,10 +144,6 @@ jobs:
             \"imageUrl\": \"$IMAGE_PATH\"
           }]"
 
-          # New instance will be named according to the version (e.g., icsapplication-v1.0.1)
-          NEW_INSTANCE_NAME="icsapplication-${VERSION}"
-
-          echo "Creating new container instance with name: $NEW_INSTANCE_NAME"
           NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --availability-domain "$LOGICAL_AD" \
@@ -157,7 +151,7 @@ jobs:
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON" \
-            --display-name "$NEW_INSTANCE_NAME" \
+            --display-name "icsapplication-$VERSION" \
             --query "data.id" --raw-output)
 
           if [ $? -ne 0 ]; then
@@ -167,14 +161,15 @@ jobs:
 
           echo "New container instance created with ID: $NEW_INSTANCE"
 
-      - name: Send success email
-        if: success()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
-
-      - name: Send failure email
+      - name: Send Notification on Success
+        uses: oracle-actions/send-oci-notification@v1.0.0
+        with:
+          topic_ocid: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
+          message: "CI/CD pipeline completed successfully. New container instance created for version $VERSION."
+      
+      - name: Send Notification on Failure
         if: failure()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+        uses: oracle-actions/send-oci-notification@v1.0.0
+        with:
+          topic_ocid: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
+          message: "CI/CD pipeline failed during the creation of container instance. Please check the logs."
