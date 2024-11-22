@@ -89,37 +89,17 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete previous container instance
+      - name: Delete existing container instance
         run: |
-          PREVIOUS_INSTANCE_NAME="icsapplication-${{ env.PREVIOUS_VERSION }}"
-
-          echo "Attempting to find instance with name: $PREVIOUS_INSTANCE_NAME"
-
           INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --query "data[?\"display-name\"=='$PREVIOUS_INSTANCE_NAME'].id | [0]" \
-            --raw-output)
-
+            --compartment-id $OCI_COMPARTMENT_OCID \
+            --display-name "icsapplication-${{ env.VERSION }}" \
+            --query "data[0].id" --raw-output)
           if [ -n "$INSTANCE_ID" ]; then
-            echo "Instance found with ID: $INSTANCE_ID"
-            echo "Initiating deletion of container instance with ID: $INSTANCE_ID"
-
+            echo "Deleting existing container instance with ID: $INSTANCE_ID"
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-
-            echo "Waiting for deletion to complete..."
-            while true; do
-              STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$INSTANCE_ID" \
-                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-              if [ "$STATUS" == "DELETED" ]; then
-                echo "Container instance successfully deleted."
-                break
-              fi
-              echo "Current status: $STATUS. Retrying in 10 seconds..."
-              sleep 10
-            done
           else
-            echo "No container instance found with the name: $PREVIOUS_INSTANCE_NAME"
+            echo "No existing container instance found."
           fi
 
       - name: Create new container instance
@@ -140,25 +120,31 @@ jobs:
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON" \
+            --display-name "icsapplication-${{ env.VERSION }}" \
             --query "data.id" --raw-output)
 
           if [ $? -ne 0 ]; then
             echo "Failed to create container instance."
+            curl -X POST "https://notification.ap-mumbai-1.oci.oraclecloud.com/20181201/notifications/$OCI_NOTIFICATION_TOPIC_OCID/messages" \
+            -H "Content-Type: application/json" \
+            -d '{"message": "Build failed at step: Create container instance. Version: ${{ env.VERSION }}"}'
             exit 1
           fi
 
           echo "New container instance created with ID: $NEW_INSTANCE"
-
-      - name: Send email on build failure
-        if: failure()
+          
+      - name: Notify build success
         run: |
-          curl -X POST "https://notification.us-ashburn-1.oci.oraclecloud.com/20181201/notifications/$OCI_NOTIFICATION_TOPIC_OCID/messages" \
-          -H "Content-Type: application/json" \
-          -d '{"message": "Build failed at step ${{ github.workflow }}. Version: ${{ env.VERSION }}"}'
-        
-      - name: Send email on build success
-        if: success()
-        run: |
-          curl -X POST "https://notification.us-ashburn-1.oci.oraclecloud.com/20181201/notifications/$OCI_NOTIFICATION_TOPIC_OCID/messages" \
+          curl -X POST "https://notification.ap-mumbai-1.oci.oraclecloud.com/20181201/notifications/$OCI_NOTIFICATION_TOPIC_OCID/messages" \
           -H "Content-Type: application/json" \
           -d '{"message": "Build succeeded. New container instance created. Version: ${{ env.VERSION }}"}'
+
+    # Post Build Action: Revert Version if failure occurs
+    post:
+      - run: |
+          echo "Reverting version to previous version"
+          PREVIOUS_VERSION=$(cat .previous_version)
+          echo "$PREVIOUS_VERSION" > .version
+          git commit -m "Revert to previous version $PREVIOUS_VERSION"
+          git push
+        if: failure()
