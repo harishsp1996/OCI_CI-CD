@@ -13,7 +13,7 @@ jobs:
       contents: write
     env:
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
@@ -89,17 +89,25 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete existing container instance
+      - name: Calculate previous version and delete existing container instance
         run: |
+          VERSION="${{ env.VERSION }}"
+          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH - 1)) # Get the previous version
+          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "Deleting container instance for previous version: $PREVIOUS_VERSION"
+
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "icsapplication-${{ env.VERSION }}" \
+            --display-name "icsapplication-${PREVIOUS_VERSION}" \
             --query "data[0].id" --raw-output)
+
           if [ -n "$INSTANCE_ID" ]; then
             echo "Deleting existing container instance with ID: $INSTANCE_ID"
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
           else
-            echo "No existing container instance found."
+            echo "No existing container instance found for version $PREVIOUS_VERSION."
           fi
 
       - name: Create new container instance
