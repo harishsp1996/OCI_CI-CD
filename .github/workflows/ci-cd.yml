@@ -160,16 +160,3 @@ jobs:
           fi
 
           echo "New container instance created with ID: $NEW_INSTANCE"
-
-      - name: Send Notification on Success
-        uses: oracle-actions/send-oci-notification@v1.0.0
-        with:
-          topic_ocid: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
-          message: "CI/CD pipeline completed successfully. New container instance created for version $VERSION."
-      
-      - name: Send Notification on Failure
-        if: failure()
-        uses: oracle-actions/send-oci-notification@v1.0.0
-        with:
-          topic_ocid: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
-          message: "CI/CD pipeline failed during the creation of container instance. Please check the logs."
