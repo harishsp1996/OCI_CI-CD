@@ -128,6 +128,7 @@ jobs:
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+          CONTAINER_NAME="icsapplication-${VERSION}"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
@@ -142,6 +143,7 @@ jobs:
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON" \
+            --display-name "$CONTAINER_NAME" \
             --query "data.id" --raw-output)
 
           if [ $? -ne 0 ]; then
