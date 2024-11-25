@@ -1,4 +1,4 @@
-name: Build, Tag, Push Docker Image, and Manage OCI Container
+name: Delete OCI Container Instance
 
 on:
   push:
@@ -6,11 +6,9 @@ on:
       - main
 
 jobs:
-  build-publish-manage:
-    name: Build, Push Docker Image, and Manage OCI Container
+  delete-container:
+    name: Delete OCI Container Instance
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     env:
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
@@ -18,12 +16,6 @@ jobs:
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
-      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
 
     steps:
       - name: Checkout Code
@@ -35,87 +27,35 @@ jobs:
           sudo apt-get install -y python3-pip
           pip3 install oci-cli
 
-      - name: Delete previous container instance
+      - name: Delete OCI Container Instance
         run: |
-          INSTANCE_NAME="icsapplication-v1.0.2"  # Update this to match your running container name
+          INSTANCE_NAME="icsapplication v1.0.2"  # Update this to match your running container name with space
           echo "Searching for container instance: $INSTANCE_NAME"
           
           # Find the instance ID by display name (escaped JMESPath)
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "$INSTANCE_NAME" \
-            --query "data[?lifecycle-state != 'DELETED' && contains(\`display-name\`, \`$INSTANCE_NAME\`)].id | [0]" --raw-output)
-          
+            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, '$INSTANCE_NAME')].id | [0]" --raw-output)
+
+          echo "Instance ID found: $INSTANCE_ID"
+
+          # Check if instance ID is found and proceed with deletion
           if [ -n "$INSTANCE_ID" ]; then
             echo "Found instance with ID: $INSTANCE_ID. Deleting..."
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-          
-            echo "Waiting for instance deletion..."
-            while true; do
-              STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$INSTANCE_ID" \
-                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-          
-              if [ "$STATUS" == "DELETED" ]; then
-                echo "Instance successfully deleted."
-                break
-              fi
-              echo "Status: $STATUS. Retrying in 10 seconds..."
-              sleep 10
-            done
+            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force --wait-for-state DELETED
+
+            echo "Deletion request sent. Waiting for confirmation..."
           else
-            echo "No instance found with the name: $INSTANCE_NAME."
-          fi
-
-      - name: Build Docker image
-        run: |
-          VERSION="${{ env.VERSION }}"
-          echo "VERSION: $VERSION"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Push Docker image to OCIR
-        run: |
-          VERSION="${{ env.VERSION }}"
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Create new container instance
-        run: |
-          VERSION="${{ env.VERSION }}"
-          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
-          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-          CONTAINER_JSON="[{
-            \"imageUrl\": \"$IMAGE_PATH\"
-          }]"
-
-          echo "Creating new container instance with image: $IMAGE_PATH"
-          NEW_INSTANCE=$(oci container-instances container-instance create \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --availability-domain "$LOGICAL_AD" \
-            --shape "CI.Standard.E4.Flex" \
-            --shape-config "$SHAPE_CONFIG_JSON" \
-            --containers "$CONTAINER_JSON" \
-            --vnics "$VNIC_JSON" \
-            --query "data.id" --raw-output)
-
-          if [ $? -ne 0 ]; then
-            echo "Failed to create container instance."
+            echo "No running container instance found with the name: $INSTANCE_NAME."
             exit 1
           fi
 
-          echo "New container instance created with ID: $NEW_INSTANCE"
-
-      - name: Send success email
-        if: success()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
-
-      - name: Send failure email
-        if: failure()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+          # Check if instance has been deleted successfully
+          STATUS=$(oci container-instances container-instance get --container-instance-id "$INSTANCE_ID" --query "data.lifecycle-state" --raw-output || echo "DELETED")
+          if [ "$STATUS" == "DELETED" ]; then
+            echo "Container instance successfully deleted."
+          else
+            echo "Failed to delete container instance. Current status: $STATUS"
+            exit 1
+          fi
