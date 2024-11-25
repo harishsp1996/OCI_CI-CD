@@ -9,6 +9,8 @@ jobs:
   delete-container:
     name: Delete OCI Container Instance
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
@@ -16,6 +18,8 @@ jobs:
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout Code
@@ -36,7 +40,7 @@ jobs:
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "$INSTANCE_NAME" \
-            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, '$INSTANCE_NAME')].id | [0]" --raw-output)
+            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, \`$INSTANCE_NAME\`)].id | [0]" --raw-output)
 
           echo "Instance ID found: $INSTANCE_ID"
 
