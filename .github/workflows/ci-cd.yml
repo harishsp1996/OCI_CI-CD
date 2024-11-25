@@ -1,59 +1,44 @@
-name: Delete OCI Container Instance
+name: Delete Container Instance by Name
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
-  delete-container:
-    name: Delete OCI Container Instance
+  delete-container-instance:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     env:
-      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OCI_CLI_PROFILE: ${{ secrets.OCI_CLI_PROFILE }}
+      OCI_CLI_CONFIG: ~/.oci/config
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Install OCI CLI
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip
+          sudo apt-get install -y python3-pip jq
           pip3 install oci-cli
 
-      - name: Delete OCI Container Instance
+      - name: Get Instance OCID
+        id: get-ocid
         run: |
-          # Define the container instance name
-          INSTANCE_NAME="icsapplication-v1.0.2"  # Update this to your container instance name
-
-          echo "Searching for container instance with name: $INSTANCE_NAME"
-
-          # Find the container instance ID using its display name
-          INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --query "data[?lifecycle-state != 'DELETED' && display-name == '${INSTANCE_NAME}'].id | [0]" --raw-output)
-
-          if [ -z "$INSTANCE_ID" ]; then
-            echo "No container instance found with name: $INSTANCE_NAME"
+          instance_ocid=$(oci container-instances container-instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --display-name "icsapplication-v1.0.2" \
+            --query "data[0].id" --raw-output)
+          
+          if [ -z "$instance_ocid" ]; then
+            echo "No container instance found with the name 'icsapplication-v1.0.2'."
             exit 1
           fi
 
-          echo "Container instance ID found: $INSTANCE_ID. Proceeding to delete..."
+          echo "Instance OCID: $instance_ocid"
+          echo "instance_ocid=$instance_ocid" >> $GITHUB_ENV
 
-          # Delete the container instance
-          oci container-instances container-instance delete \
-            --container-instance-id "$INSTANCE_ID" \
-            --force \
-            --wait-for-state DELETED
+      - name: Delete Container Instance
+        run: |
+          echo "Stopping and deleting the container instance with OCID: $instance_ocid"
+          oci container-instances container-instance delete --container-instance-id "$instance_ocid" --force --wait-for-state DELETED
 
-          echo "Container instance $INSTANCE_NAME deleted successfully."
+          echo "Container instance 'icsapplication-v1.0.2' has been successfully deleted."
