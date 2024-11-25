@@ -40,7 +40,7 @@ jobs:
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "$INSTANCE_NAME" \
-            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, \`$INSTANCE_NAME\`)].id | [0]" --raw-output)
+            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, '$INSTANCE_NAME')].id | [0]" --raw-output)
 
           echo "Instance ID found: $INSTANCE_ID"
 
