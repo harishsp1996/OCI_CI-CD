@@ -1,4 +1,4 @@
-name: Delete Container Instance by Name
+name: Debug Container Instance Deletion
 
 on:
   workflow_dispatch:
@@ -20,9 +20,18 @@ jobs:
           sudo apt-get install -y python3-pip jq
           pip3 install oci-cli
 
+      - name: List Container Instances (Debug)
+        run: |
+          echo "Listing all container instances in compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}"
+          oci container-instances container-instance list \
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
+            --query "data[*].{Name:'display-name', ID:id}" \
+            --output table
+
       - name: Get Instance OCID
         id: get-ocid
         run: |
+          echo "Fetching OCID for container instance: icsapplication-v1.0.2"
           instance_ocid=$(oci container-instances container-instance list \
             --compartment-id ${{ secrets.OCI_COMPARTMENT_OCID }} \
             --display-name "icsapplication-v1.0.2" \
@@ -38,7 +47,7 @@ jobs:
 
       - name: Delete Container Instance
         run: |
-          echo "Stopping and deleting the container instance with OCID: $instance_ocid"
+          echo "Deleting container instance with OCID: $instance_ocid"
           oci container-instances container-instance delete --container-instance-id "$instance_ocid" --force --wait-for-state DELETED
 
-          echo "Container instance 'icsapplication-v1.0.2' has been successfully deleted."
+          echo "Container instance 'icsapplication-v1.0.2' successfully deleted."
