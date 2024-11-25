@@ -1,62 +1,59 @@
-name: Delete Container Instance
+name: Delete OCI Container Instance
 
 on:
-  workflow_dispatch: # Allows manual trigger of this workflow
+  push:
+    branches:
+      - main
 
 jobs:
-  delete_container_instance:
+  delete-container:
+    name: Delete OCI Container Instance
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-    - name: Checkout the repository
-      uses: actions/checkout@v2
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Set up OCI CLI
-      run: |
-        # Install OCI CLI
-        curl -L https://github.com/oracle/oci-cli/releases/download/v3.50.2/oci-cli-3.50.2-linux.zip -o oci-cli.zip
-        unzip oci-cli.zip
-        sudo ./oci/install.py --accept-all-defaults
-        oci --version
+      - name: Install OCI CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install oci-cli
 
-    - name: Delete container instance
-      run: |
-        INSTANCE_NAME="icsapplication v1.0.2"  # Update this to match your running container name with space
-        echo "Searching for container instance: $INSTANCE_NAME"
-        
-        # Find the instance ID by display name (escaped JMESPath)
-        INSTANCE_ID=$(oci container-instances container-instance list \
-          --compartment-id $OCI_COMPARTMENT_OCID \
-          --display-name "$INSTANCE_NAME" \
-          --query "data[?lifecycle-state != 'DELETED' && contains(display-name, '$INSTANCE_NAME')].id | [0]" --raw-output)
+      - name: Delete OCI Container Instance
+        run: |
+          # Define the container instance name
+          INSTANCE_NAME="icsapplication-v1.0.2"  # Update this to your container instance name
 
-        echo "Instance ID found: $INSTANCE_ID"
-        
-        # Check if instance ID is found and proceed with deletion
-        if [ -n "$INSTANCE_ID" ]; then
-          echo "Found instance with ID: $INSTANCE_ID. Deleting..."
-          
-          # Delete the container instance using its ID
-          oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force --wait-for-state DELETED
-          
-          echo "Deletion request sent. Waiting for confirmation..."
-        else
-          echo "No running container instance found with the name: $INSTANCE_NAME."
-          exit 1
-        fi
-        
-        # Check if instance has been deleted successfully
-        STATUS=$(oci container-instances container-instance get --container-instance-id "$INSTANCE_ID" --query "data.lifecycle-state" --raw-output || echo "DELETED")
-        if [ "$STATUS" == "DELETED" ]; then
-          echo "Container instance successfully deleted."
-        else
-          echo "Failed to delete container instance. Current status: $STATUS"
-          exit 1
-        fi
-      env:
-        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-        OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          echo "Searching for container instance with name: $INSTANCE_NAME"
+
+          # Find the container instance ID using its display name
+          INSTANCE_ID=$(oci container-instances container-instance list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --query "data[?lifecycle-state != 'DELETED' && display-name == '${INSTANCE_NAME}'].id | [0]" --raw-output)
+
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "No container instance found with name: $INSTANCE_NAME"
+            exit 1
+          fi
+
+          echo "Container instance ID found: $INSTANCE_ID. Proceeding to delete..."
+
+          # Delete the container instance
+          oci container-instances container-instance delete \
+            --container-instance-id "$INSTANCE_ID" \
+            --force \
+            --wait-for-state DELETED
+
+          echo "Container instance $INSTANCE_NAME deleted successfully."
