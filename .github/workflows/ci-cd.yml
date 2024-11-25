@@ -1,11 +1,13 @@
-name: Delete OCI Container Instance
+name: Build, Tag, Push Docker Image, and Manage OCI Container
 
 on:
-  workflow_dispatch:  # Allows manual trigger from GitHub Actions UI
+  push:
+    branches:
+      - main
 
 jobs:
-  delete-container:
-    name: Delete OCI Container Instance
+  build-publish-manage:
+    name: Build, Push Docker Image, and Manage OCI Container
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,7 +18,13 @@ jobs:
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-    
+      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
+      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
+      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
+      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -27,28 +35,27 @@ jobs:
           sudo apt-get install -y python3-pip
           pip3 install oci-cli
 
-      - name: Delete existing container instance
+      - name: Delete previous container instance
         run: |
-          # Define the name of the container instance to delete
           INSTANCE_NAME="icsapplication-v1.0.2"  # Update this to match your running container name
           echo "Searching for container instance: $INSTANCE_NAME"
-
-          # Find the instance ID by display name
+          
+          # Find the instance ID by display name (escaped JMESPath)
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id $OCI_COMPARTMENT_OCID \
             --display-name "$INSTANCE_NAME" \
-            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, \`$INSTANCE_NAME\`)].id | [0]" --raw-output)
-
+            --query "data[?lifecycle-state != 'DELETED' && contains(\`display-name\`, \`$INSTANCE_NAME\`)].id | [0]" --raw-output)
+          
           if [ -n "$INSTANCE_ID" ]; then
             echo "Found instance with ID: $INSTANCE_ID. Deleting..."
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-
+          
             echo "Waiting for instance deletion..."
             while true; do
               STATUS=$(oci container-instances container-instance get \
                 --container-instance-id "$INSTANCE_ID" \
                 --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-
+          
               if [ "$STATUS" == "DELETED" ]; then
                 echo "Instance successfully deleted."
                 break
@@ -59,3 +66,56 @@ jobs:
           else
             echo "No instance found with the name: $INSTANCE_NAME."
           fi
+
+      - name: Build Docker image
+        run: |
+          VERSION="${{ env.VERSION }}"
+          echo "VERSION: $VERSION"
+          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+
+      - name: Push Docker image to OCIR
+        run: |
+          VERSION="${{ env.VERSION }}"
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+
+      - name: Create new container instance
+        run: |
+          VERSION="${{ env.VERSION }}"
+          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+          CONTAINER_JSON="[{
+            \"imageUrl\": \"$IMAGE_PATH\"
+          }]"
+
+          echo "Creating new container instance with image: $IMAGE_PATH"
+          NEW_INSTANCE=$(oci container-instances container-instance create \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --availability-domain "$LOGICAL_AD" \
+            --shape "CI.Standard.E4.Flex" \
+            --shape-config "$SHAPE_CONFIG_JSON" \
+            --containers "$CONTAINER_JSON" \
+            --vnics "$VNIC_JSON" \
+            --query "data.id" --raw-output)
+
+          if [ $? -ne 0 ]; then
+            echo "Failed to create container instance."
+            exit 1
+          fi
+
+          echo "New container instance created with ID: $NEW_INSTANCE"
+
+      - name: Send success email
+        if: success()
+        run: |
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
+
+      - name: Send failure email
+        if: failure()
+        run: |
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
