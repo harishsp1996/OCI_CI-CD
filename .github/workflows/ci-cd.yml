@@ -1,13 +1,11 @@
-name: Build, Tag, Push Docker Image, and Manage OCI Container
+name: Delete OCI Container Instance
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:  # Allows manual trigger from GitHub Actions UI
 
 jobs:
-  build-publish-manage:
-    name: Build, Push Docker Image, and Manage OCI Container
+  delete-container:
+    name: Delete OCI Container Instance
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,13 +16,7 @@ jobs:
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
-      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
-
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -35,41 +27,35 @@ jobs:
           sudo apt-get install -y python3-pip
           pip3 install oci-cli
 
-      - name: Delete previous container instance
-  run: |
-    CURRENT_VERSION=$(cat .version)
-    echo "Current version: $CURRENT_VERSION"
+      - name: Delete existing container instance
+        run: |
+          # Define the name of the container instance to delete
+          INSTANCE_NAME="icsapplication-v1.0.2"  # Update this to match your running container name
+          echo "Searching for container instance: $INSTANCE_NAME"
 
-    BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
-    IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-    PATCH=$((PATCH - 1))
-    PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-    PREVIOUS_INSTANCE_NAME="icsapplication-${PREVIOUS_VERSION}"
+          # Find the instance ID by display name
+          INSTANCE_ID=$(oci container-instances container-instance list \
+            --compartment-id $OCI_COMPARTMENT_OCID \
+            --display-name "$INSTANCE_NAME" \
+            --query "data[?lifecycle-state != 'DELETED' && contains(display-name, \`$INSTANCE_NAME\`)].id | [0]" --raw-output)
 
-    echo "Searching for container instance: $PREVIOUS_INSTANCE_NAME"
-    
-    INSTANCE_ID=$(oci container-instances container-instance list \
-      --compartment-id $OCI_COMPARTMENT_OCID \
-      --display-name "$PREVIOUS_INSTANCE_NAME" \
-      --query "data[?lifecycle-state != 'DELETED' && contains(display-name, \`$PREVIOUS_INSTANCE_NAME\`)].id | [0]" --raw-output)
+          if [ -n "$INSTANCE_ID" ]; then
+            echo "Found instance with ID: $INSTANCE_ID. Deleting..."
+            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
 
-    if [ -n "$INSTANCE_ID" ]; then
-      echo "Found instance with ID: $INSTANCE_ID. Deleting..."
-      oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            echo "Waiting for instance deletion..."
+            while true; do
+              STATUS=$(oci container-instances container-instance get \
+                --container-instance-id "$INSTANCE_ID" \
+                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
 
-      echo "Waiting for instance deletion..."
-      while true; do
-        STATUS=$(oci container-instances container-instance get \
-          --container-instance-id "$INSTANCE_ID" \
-          --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-        
-        if [ "$STATUS" == "DELETED" ]; then
-          echo "Instance successfully deleted."
-          break
-        fi
-        echo "Status: $STATUS. Retrying in 10 seconds..."
-        sleep 10
-      done
-    else
-      echo "No instance found with name: $PREVIOUS_INSTANCE_NAME."
-    fi
+              if [ "$STATUS" == "DELETED" ]; then
+                echo "Instance successfully deleted."
+                break
+              fi
+              echo "Status: $STATUS. Retrying in 10 seconds..."
+              sleep 10
+            done
+          else
+            echo "No instance found with the name: $INSTANCE_NAME."
+          fi
