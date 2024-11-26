@@ -92,15 +92,22 @@ jobs:
 
       - name: Delete previous container instance
         run: |
+          # Fetch the current version from the .version file
           CURRENT_VERSION=$(cat .version)
           echo "Current version: $CURRENT_VERSION"
+
+          # Calculate previous version (e.g., v1.0.1 -> v1.0.0)
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))
+          PATCH=$((PATCH - 1))  # Decrement the patch version to get previous version
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
           echo "Previous version: $PREVIOUS_VERSION"
+
+          # Build the previous version's container instance name
           PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
           echo "Previous instance name: $PREVIOUS_INSTANCE_NAME"
+
+          # Query OCI for the instance ID using the previous version name and lifecycle state
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --region "$OCI_CLI_REGION" \
@@ -108,13 +115,18 @@ jobs:
 
           if [ -n "$INSTANCE_ID" ]; then
             echo "Found container instance with ID: $INSTANCE_ID"
+            
+            # Use the INSTANCE_ID to delete the container instance
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
             echo "Deleting container instance with ID: $INSTANCE_ID"
+
+            # Wait until the deletion is complete
             echo "Waiting for the deletion to complete..."
             while true; do
               STATUS=$(oci container-instances container-instance get \
                 --container-instance-id "$INSTANCE_ID" \
                 --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+              
               if [ "$STATUS" == "DELETED" ]; then
                 echo "Previous instance successfully deleted."
                 break
@@ -130,7 +142,8 @@ jobs:
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-          INSTANCE_NAME="icsapp$VERSION"
+          INSTANCE_NAME="icsapp$VERSION"  # Set display name based on version
+
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
@@ -155,48 +168,51 @@ jobs:
 
           echo "New container instance created with ID: $NEW_INSTANCE"
 
-      - name: Wait for container instance to become ACTIVE
+      - name: Wait for the container instance to become ACTIVE
         run: |
           INSTANCE_NAME="icsapp${{ env.VERSION }}"
-          echo "Waiting for the container instance with name $INSTANCE_NAME to become ACTIVE..."
+          echo "Waiting for the container instance with name $INSTANCE_NAME to become ACTIVE or FAILED..."
+
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'"$INSTANCE_NAME"'" and .["lifecycle-state"] == "ACTIVE") | .id')
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'"$INSTANCE_NAME"'" ) | .id')
 
           if [ -z "$INSTANCE_ID" ]; then
-            echo "Error: Container instance is not in ACTIVE state or not found."
+            echo "Error: Container instance not found."
             exit 1
           fi
 
-          echo "Container instance with ID $INSTANCE_ID is ACTIVE."
+          # Loop to check the lifecycle state
+          while true; do
+            STATUS=$(oci container-instances container-instance get \
+              --container-instance-id "$INSTANCE_ID" \
+              --query "data.lifecycle-state" --raw-output)
+            
+            if [ "$STATUS" == "ACTIVE" ]; then
+              echo "Container instance is ACTIVE."
+              break
+            elif [ "$STATUS" == "FAILED" ]; then
+              echo "Container instance creation failed."
+              # Clean up by deleting the failed instance
+              oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+              echo "Deleting failed container instance with ID: $INSTANCE_ID"
+              exit 1
+            fi
+            
+            echo "Current status: $STATUS. Waiting for ACTIVE or FAILED state..."
+            sleep 10
+          done
 
       - name: Send success email
         if: success()
         run: |
           oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
+            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
 
       - name: Send failure email
         if: failure()
         run: |
           oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build or deployment failed.\"}"
 
-      - name: Revert version file on failure
-        if: failure()
-        run: |
-          echo "Reverting version file to previous version: ${{ env.PREVIOUS_VERSION }}"
-          echo "${{ env.PREVIOUS_VERSION }}" > .version
-          git config --local user.name "harishsp1996"
-          git config --local user.email "harish.sp.4196@gmail.com"
-          git add .version
-          git commit -m "Revert version to ${{ env.PREVIOUS_VERSION }} after failed build"
-          git push
-
-      - name: Delete the failed container instance
-        if: failure()
-        run: |
-          echo "Deleting the failed container instance..."
-          oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-          echo "Failed container instance deleted."
