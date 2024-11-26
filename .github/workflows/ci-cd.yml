@@ -105,6 +105,7 @@ jobs:
 
           # Build the previous version's container instance name
           PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+          echo "Previous instance name: $PREVIOUS_INSTANCE_NAME"
 
           # Query OCI for the instance ID using the previous version name and lifecycle state
           INSTANCE_ID=$(oci container-instances container-instance list \
