@@ -1,218 +1,103 @@
-name: Build, Tag, Push Docker Image, and Manage OCI Container
+name: OCI Container Instance Deployment
 
 on:
   push:
     branches:
-      - main
+      - main  # Trigger on push to the main branch
 
 jobs:
-  build-publish-manage:
-    name: Build, Push Docker Image, and Manage OCI Container
+  deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    env:
-      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
-      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}  # OCI Notification topic for emails
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-      - name: Install OCI CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install oci-cli
-
-      - name: Get or create an OCIR repository
-        uses: oracle-actions/get-ocir-repository@v1.3.0
-        id: get-ocir-repository
+      - name: Set up OCI CLI
+        uses: oracle/oci-cli-action@v1
         with:
-          name: cicd
-          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          oci_api_key: ${{ secrets.OCI_API_KEY }}
+          oci_tenancy: ${{ secrets.OCI_TENANCY }}
+          oci_user: ${{ secrets.OCI_USER }}
+          oci_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          oci_region: "ap-mumbai-1"
 
-      - name: Log into OCIR
-        uses: oracle-actions/login-ocir@v1.3.0
-        with:
-          auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
-
-      - name: Determine new version tag
-        id: determine-version
+      - name: Build and Push Docker Image
         run: |
-          if [ -f .version ]; then
-            VERSION=$(cat .version)
-            echo "Current version: $VERSION"
-          else
-            VERSION="v1.0.0"
-            echo "No version file found. Starting with version: $VERSION"
-          fi
-          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH + 1))
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Next version: $NEW_VERSION"
-          echo "$NEW_VERSION" > .version
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          VERSION="v1.0.7"
+          IMAGE_NAME="oci-registry/image:$VERSION"
+          echo "Building Docker image: $IMAGE_NAME"
+          
+          # Build the Docker image
+          docker build -t $IMAGE_NAME .
+          docker push $IMAGE_NAME
+          
+          echo "Docker image $IMAGE_NAME pushed to OCIR."
 
-      - name: Commit version file
+      - name: Deploy Container Instance
         run: |
-          git config --local user.name "harishsp1996"
-          git config --local user.email "harish.sp.4196@gmail.com"
-          git add .version
-          git commit -m "Update version to $NEW_VERSION"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
-        run: |
-          VERSION="${{ env.VERSION }}"
-          echo "VERSION: $VERSION"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Push Docker image to OCIR
-        run: |
-          VERSION="${{ env.VERSION }}"
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Delete previous container instance
-        run: |
-          # Fetch the current version from the .version file
-          CURRENT_VERSION=$(cat .version)
-          echo "Current version: $CURRENT_VERSION"
-
-          # Calculate previous version (e.g., v1.0.1 -> v1.0.0)
-          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))  # Decrement the patch version to get previous version
-          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Previous version: $PREVIOUS_VERSION"
-
-          # Build the previous version's container instance name
-          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-          echo "Previous instance name: $PREVIOUS_INSTANCE_NAME"
-
-          # Query OCI for the instance ID using the previous version name and lifecycle state
-          INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
-
-          if [ -n "$INSTANCE_ID" ]; then
-            echo "Found container instance with ID: $INSTANCE_ID"
-            
-            # Use the INSTANCE_ID to delete the container instance
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-            echo "Deleting container instance with ID: $INSTANCE_ID"
-
-            # Wait until the deletion is complete
-            echo "Waiting for the deletion to complete..."
-            while true; do
-              STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$INSTANCE_ID" \
-                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-              
-              if [ "$STATUS" == "DELETED" ]; then
-                echo "Previous instance successfully deleted."
-                break
-              fi
-              echo "Current status: $STATUS. Retrying in 10 seconds..."
-              sleep 10
-            done
-          else
-            echo "No container instance found with name: $PREVIOUS_INSTANCE_NAME"
-          fi
-
-      - name: Create new container instance
-        run: |
-          VERSION="${{ env.VERSION }}"
-          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-          INSTANCE_NAME="icsapp$VERSION"  # Set display name based on version
-
-          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
-          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-          CONTAINER_JSON="[{
-            \"imageUrl\": \"$IMAGE_PATH\"
-          }]"
-
-          echo "Creating new container instance with image: $IMAGE_PATH"
+          VERSION="v1.0.7"
+          INSTANCE_NAME="icsapplicationv$VERSION"
+          
+          # Create a new container instance and get its ID
           NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --availability-domain "$LOGICAL_AD" \
-            --shape "CI.Standard.E4.Flex" \
-            --shape-config "$SHAPE_CONFIG_JSON" \
-            --containers "$CONTAINER_JSON" \
-            --vnics "$VNIC_JSON" \
+            --region "$OCI_CLI_REGION" \
             --display-name "$INSTANCE_NAME" \
+            --image "$IMAGE_NAME" \
+            --subnet-id "$OCI_SUBNET_OCID" \
             --query "data.id" --raw-output)
+          echo "Created new container instance: $NEW_INSTANCE"
 
-          if [ $? -ne 0 ]; then
-            echo "Failed to create container instance."
-            exit 1
-          fi
-
-          echo "New container instance created with ID: $NEW_INSTANCE"
-
-      - name: Wait for the container instance to become ACTIVE
-        run: |
-          INSTANCE_NAME="icsapp${{ env.VERSION }}"
+          # Wait for the container instance to become ACTIVE or FAILED
           echo "Waiting for the container instance with name $INSTANCE_NAME to become ACTIVE or FAILED..."
-
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'"$INSTANCE_NAME"'" ) | .id')
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'"$INSTANCE_NAME"'" and .["lifecycle-state"] == "ACTIVE") | .id')
 
           if [ -z "$INSTANCE_ID" ]; then
-            echo "Error: Container instance not found."
+            echo "Error: Container instance is not in ACTIVE state or not found."
             exit 1
           fi
 
-          # Loop to check the lifecycle state
-          while true; do
+          echo "Container instance with ID $INSTANCE_ID is ACTIVE."
+
+          # If the status is not ACTIVE, delete the failed instance and revert changes
+          STATUS=$(oci container-instances container-instance get \
+            --container-instance-id "$INSTANCE_ID" \
+            --query "data.lifecycle-state" --raw-output)
+          
+          while [ "$STATUS" != "ACTIVE" ] && [ "$STATUS" != "FAILED" ]; do
+            echo "Current status: $STATUS. Waiting for ACTIVE or FAILED state..."
+            sleep 10
             STATUS=$(oci container-instances container-instance get \
               --container-instance-id "$INSTANCE_ID" \
               --query "data.lifecycle-state" --raw-output)
-            
-            if [ "$STATUS" == "ACTIVE" ]; then
-              echo "Container instance is ACTIVE."
-              break
-            elif [ "$STATUS" == "FAILED" ]; then
-              echo "Container instance creation failed."
-              # Clean up by deleting the failed instance
-              oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-              echo "Deleting failed container instance with ID: $INSTANCE_ID"
-              exit 1
-            fi
-            
-            echo "Current status: $STATUS. Waiting for ACTIVE or FAILED state..."
-            sleep 10
           done
 
-      - name: Send success email
-        if: success()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
+          if [ "$STATUS" == "FAILED" ]; then
+            echo "Container instance creation failed."
+            # Delete the failed container instance
+            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            echo "Deleting failed container instance with ID: $INSTANCE_ID"
+            exit 1
+          fi
 
-      - name: Send failure email
-        if: failure()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build or deployment failed.\"}"
+          echo "Container instance is ACTIVE. Proceeding with the deployment."
 
+      - name: Post build actions (send notification and cleanup)
+        run: |
+          # Notify of success or failure
+          if [ $? -eq 0 ]; then
+            echo "Deployment successful."
+            # Add notification code here (e.g., using OCI Notifications or another service)
+          else
+            echo "Deployment failed. Reverting changes."
+            # Add rollback or cleanup logic here
+            exit 1
+          fi
+        shell: bash
+        env:
+          OCI_CLI_REGION: "ap-mumbai-1"
+          OCI_COMPARTMENT_OCID: "ocid1.tenancy.oc1..aaaaaaaapeqpb7s6neeq7jnlby7ftkcn6se7g6soav5mzjzg2co3foauuctq"
+          OCI_SUBNET_OCID: "your_subnet_ocid"
