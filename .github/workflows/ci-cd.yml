@@ -96,7 +96,7 @@ jobs:
           echo "Current version: $CURRENT_VERSION"
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))  
+          PATCH=$((PATCH - 1))
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
           echo "Previous version: $PREVIOUS_VERSION"
           PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
@@ -115,7 +115,6 @@ jobs:
               STATUS=$(oci container-instances container-instance get \
                 --container-instance-id "$INSTANCE_ID" \
                 --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-              
               if [ "$STATUS" == "DELETED" ]; then
                 echo "Previous instance successfully deleted."
                 break
@@ -158,51 +157,46 @@ jobs:
 
       - name: Wait for container instance to become ACTIVE
         run: |
-          INSTANCE_ID="${NEW_INSTANCE}"
-          echo "Waiting for the container instance to become ACTIVE..."
-          while true; do
-            STATUS=$(oci container-instances container-instance get \
-              --container-instance-id "$INSTANCE_ID" \
-              --query "data.lifecycle-state" --raw-output)
-            
-            if [ "$STATUS" == "ACTIVE" ]; then
-              echo "Container instance is ACTIVE."
-              break
-            fi
-            echo "Current status: $STATUS. Retrying in 10 seconds..."
-            sleep 10
-          done
+          INSTANCE_NAME="icsapp${{ env.VERSION }}"
+          echo "Waiting for the container instance with name $INSTANCE_NAME to become ACTIVE..."
+          INSTANCE_ID=$(oci container-instances container-instance list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --region "$OCI_CLI_REGION" \
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'"$INSTANCE_NAME"'" and .["lifecycle-state"] == "ACTIVE") | .id')
 
-      - name: Revert if container instance creation failed
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "Error: Container instance is not in ACTIVE state or not found."
+            exit 1
+          fi
+
+          echo "Container instance with ID $INSTANCE_ID is ACTIVE."
+
+      - name: Send success email
+        if: success()
+        run: |
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
+
+      - name: Send failure email
         if: failure()
         run: |
-          echo "Container instance creation failed. Deleting failed instance and reverting version..."
-          INSTANCE_ID="${NEW_INSTANCE}"
-          oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-          echo "Deleted failed container instance with ID: $INSTANCE_ID"
-          
-          # Revert version file to previous version
-          PREVIOUS_VERSION=$(cat .version)
-          echo "Reverting version file to previous version: $PREVIOUS_VERSION"
-          echo "${PREVIOUS_VERSION}" > .version
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+
+      - name: Revert version file on failure
+        if: failure()
+        run: |
+          echo "Reverting version file to previous version: ${{ env.PREVIOUS_VERSION }}"
+          echo "${{ env.PREVIOUS_VERSION }}" > .version
           git config --local user.name "harishsp1996"
           git config --local user.email "harish.sp.4196@gmail.com"
           git add .version
-          git commit -m "Revert version to $PREVIOUS_VERSION after failed container instance creation"
+          git commit -m "Revert version to ${{ env.PREVIOUS_VERSION }} after failed build"
           git push
 
-          # Redeploy previous image
-          PREVIOUS_VERSION="v$MAJOR.$MINOR.$((PATCH - 1))"
-          PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
-          echo "Redeploying previous image: $PREVIOUS_IMAGE_PATH"
-          
-          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-          NEW_INSTANCE=$(oci container-instances container-instance create \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --availability-domain "$LOGICAL_AD" \
-            --shape "CI.Standard.E4.Flex" \
-            --shape-config "$SHAPE_CONFIG_JSON" \
-            --containers "[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]" \
-            --vnics "$VNIC_JSON" \
-            --display-name "$PREVIOUS_INSTANCE_NAME" \
-            --
+      - name: Delete the failed container instance
+        if: failure()
+        run: |
+          echo "Deleting the failed container instance..."
+          oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+          echo "Failed container instance deleted."
