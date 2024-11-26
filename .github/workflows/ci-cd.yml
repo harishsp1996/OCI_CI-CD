@@ -103,20 +103,21 @@ jobs:
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
           echo "Previous version: $PREVIOUS_VERSION"
 
-          # Build the previous version's container instance name with the correct format
-          PREVIOUS_INSTANCE_NAME="icssapplication$PREVIOUS_VERSION"
+          # Build the previous version's container instance name
+          PREVIOUS_INSTANCE_NAME="icsapplication${PREVIOUS_VERSION}"
 
-          # Query OCI for the instance ID using the previous version name
+          # Query OCI for the instance ID using the previous version name and lifecycle state
           INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "$PREVIOUS_INSTANCE_NAME" \
-            --query "data[0].id" --raw-output)
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --region "$OCI_CLI_REGION" \
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
 
           if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting previous container instance with ID: $INSTANCE_ID"
+            echo "Found container instance with ID: $INSTANCE_ID"
             
-            # Delete the previous container instance using its ID
+            # Use the INSTANCE_ID to delete the container instance
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            echo "Deleting container instance with ID: $INSTANCE_ID"
 
             # Wait until the deletion is complete
             echo "Waiting for the deletion to complete..."
@@ -146,8 +147,6 @@ jobs:
             \"imageUrl\": \"$IMAGE_PATH\"
           }]"
 
-          # Build the new container instance name with the correct format
-          NEW_INSTANCE_NAME="icssapplication$VERSION"
           echo "Creating new container instance with image: $IMAGE_PATH"
           NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
@@ -156,7 +155,6 @@ jobs:
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON" \
-            --display-name "$NEW_INSTANCE_NAME" \
             --query "data.id" --raw-output)
 
           if [ $? -ne 0 ]; then
