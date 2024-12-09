@@ -68,7 +68,7 @@ jobs:
 
       - name: Commit version file
         run: |
-          git config --local user.name "harishsp1996"
+          git config --local user.name "harishsp96"
           git config --local user.email "harish.sp.4196@gmail.com"
           git add .version
           git commit -m "Update version to $NEW_VERSION"
