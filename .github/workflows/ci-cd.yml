@@ -116,7 +116,7 @@ jobs:
             done
           fi
 
-      - name: Create new container instance and wait for status
+            - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
@@ -142,9 +142,10 @@ jobs:
           # Wait for instance to become ACTIVE or FAILED
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
-            CURRENT_STATUS=$(oci container-instances container-instance get \
-              --container-instance-id "$NEW_INSTANCE" \
-              --query "data.lifecycle-state" --raw-output)
+            CURRENT_STATUS=$(oci container-instances container-instance list \
+              --compartment-id "$OCI_COMPARTMENT_OCID" \
+              --region "$OCI_CLI_REGION" \
+              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
 
             echo "Current status: $CURRENT_STATUS"
 
@@ -156,7 +157,7 @@ jobs:
             elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
               echo "Status FAILED found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
               break
             else
               echo "Ignoring status: $CURRENT_STATUS"
