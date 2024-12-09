@@ -116,7 +116,7 @@ jobs:
             done
           fi
 
-            - name: Create new container instance and wait for status
+      - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
