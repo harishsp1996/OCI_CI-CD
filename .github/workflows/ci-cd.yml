@@ -140,7 +140,7 @@ jobs:
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
           # Wait for instance to become ACTIVE or FAILED
-          LAST_STATUS="CREATING"
+          LAST_STATUS=""
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
             CURRENT_STATUS=$(oci container-instances container-instance list \
@@ -149,8 +149,10 @@ jobs:
               --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$VERSION'") | .["lifecycle-state"]')
 
             echo "Current status: $CURRENT_STATUS, Last status: $LAST_STATUS"
-            
-            if [[ "$CURRENT_STATUS" == "ACTIVE" && "$LAST_STATUS" == "DELETED" ]] || [[ "$CURRENT_STATUS" == "FAILED" && "$LAST_STATUS" == "DELETED" ]]; then
+
+            # Check for either ACTIVE or FAILED with DELETED status
+            if [[ ("$CURRENT_STATUS" == "ACTIVE" && "$LAST_STATUS" == "DELETED") || 
+                  ("$CURRENT_STATUS" == "FAILED" && "$LAST_STATUS" == "DELETED") ]]; then
               echo "Status transition met: Breaking the loop."
               # Send success or failure email
               if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
@@ -163,6 +165,7 @@ jobs:
               break
             fi
 
+            # Update the last status and wait before checking again
             LAST_STATUS="$CURRENT_STATUS"
             sleep 10
           done
