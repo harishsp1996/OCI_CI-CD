@@ -101,7 +101,7 @@ jobs:
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(."display-name" == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
 
           if [ -n "$INSTANCE_ID" ]; then
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
@@ -116,7 +116,7 @@ jobs:
             done
           fi
 
-      - name: Create new container instance and validate
+      - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
@@ -137,25 +137,27 @@ jobs:
             --display-name "$INSTANCE_NAME" \
             --query "data.id" --raw-output)
 
+          # Wait for instance to become ACTIVE or FAILED
           while true; do
-            DISPLAY_NAME=$(oci container-instances container-instance list \
+            STATUS=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
-              --raw-output | jq -r '.data.items[] | select(."display-name" == "'$INSTANCE_NAME'") | ."display-name"')
+              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$NEW_VERSION'") | .["lifecycle-state"]')
 
-            if [ "$DISPLAY_NAME" == "$INSTANCE_NAME" ]; then
-              STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$NEW_INSTANCE" \
-                --query "data.lifecycle-state" --raw-output)
-              if [ "$STATUS" == "ACTIVE" ]; then
-                oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                  --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
-                break
-              elif [ "$STATUS" == "FAILED" ]; then
-                oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                  --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
-                break
-              fi
+            if [ "$STATUS" == "ACTIVE" ] || [ "$STATUS" == "FAILED" ]; then
+              break
             fi
             sleep 10
           done
+
+      - name: Send success email
+        if: success()
+        run: |
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
+
+      - name: Send failure email
+        if: failure()
+        run: |
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
