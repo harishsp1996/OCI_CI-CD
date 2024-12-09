@@ -89,8 +89,34 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
+      - name: Delete previous container instance
+        run: |
+          CURRENT_VERSION=$(cat .version)
+          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH - 1))
+          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+
+          INSTANCE_ID=$(oci container-instances container-instance list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --region "$OCI_CLI_REGION" \
+            --raw-output | jq -r '.data.items[] | select(."display-name" == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
+
+          if [ -n "$INSTANCE_ID" ]; then
+            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            while true; do
+              STATUS=$(oci container-instances container-instance get \
+                --container-instance-id "$INSTANCE_ID" \
+                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+              if [ "$STATUS" == "DELETED" ]; then
+                break
+              fi
+              sleep 10
+            done
+          fi
+
       - name: Create new container instance and validate
-        id: create-instance
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
@@ -111,31 +137,37 @@ jobs:
             --display-name "$INSTANCE_NAME" \
             --query "data.id" --raw-output)
 
-          if [ $? -ne 0 ]; then
-            echo "Failed to create container instance."
-            exit 1
-          fi
+          # Wait for the display name to appear in the container instance list
+          while true; do
+            DISPLAY_NAME=$(oci container-instances container-instance list \
+              --compartment-id "$OCI_COMPARTMENT_OCID" \
+              --region "$OCI_CLI_REGION" \
+              --raw-output | jq -r '.data.items[] | select(."display-name" == "'$INSTANCE_NAME'") | .["display-name"]')
 
-          echo "New container instance created with ID: $NEW_INSTANCE"
-          echo "INSTANCE_ID=$NEW_INSTANCE" >> $GITHUB_ENV
+            if [ "$DISPLAY_NAME" == "$INSTANCE_NAME" ]; then
+              break
+            fi
+            sleep 10
+          done
 
+          # Now that the display name is confirmed, check the lifecycle state
           while true; do
             STATUS=$(oci container-instances container-instance get \
               --container-instance-id "$NEW_INSTANCE" \
               --query "data.lifecycle-state" --raw-output)
-
+            
+            # Check the lifecycle state
             if [ "$STATUS" == "ACTIVE" ]; then
-              echo "Container instance is ACTIVE."
+              # Send success email notification
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
               break
             elif [ "$STATUS" == "FAILED" ]; then
-              echo "Container instance creation FAILED. Exiting."
-              exit 1
+              # Send failure email notification
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+              break
             fi
-            echo "Current status: $STATUS. Retrying in 10 seconds..."
+
             sleep 10
           done
-
-      - name: Send success email
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Container instance is ACTIVE with ID: ${{ env.INSTANCE_ID }}.\"}"
