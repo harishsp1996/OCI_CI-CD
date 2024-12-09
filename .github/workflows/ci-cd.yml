@@ -1,194 +1,49 @@
-name: Build, Tag, Push Docker Image, and Manage OCI Container
+# Variables
+VERSION="${{ env.VERSION }}"
+IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+INSTANCE_NAME="icsapp$VERSION"
+SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+CONTAINER_JSON="[{
+  \"imageUrl\": \"$IMAGE_PATH\"
+}]"
 
-on:
-  push:
-    branches:
-      - main
+# Create new container instance
+NEW_INSTANCE=$(oci container-instances container-instance create \
+  --compartment-id "$OCI_COMPARTMENT_OCID" \
+  --availability-domain "$LOGICAL_AD" \
+  --shape "CI.Standard.E4.Flex" \
+  --shape-config "$SHAPE_CONFIG_JSON" \
+  --containers "$CONTAINER_JSON" \
+  --vnics "$VNIC_JSON" \
+  --display-name "$INSTANCE_NAME" \
+  --query "data.id" --raw-output)
 
-jobs:
-  build-publish-manage:
-    name: Build, Push Docker Image, and Manage OCI Container
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    env:
-      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
-      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
+# Wait for the instance to reach ACTIVE state
+echo "Waiting for container instance to become ACTIVE..."
+while true; do
+  STATUS=$(oci container-instances container-instance get \
+    --container-instance-id "$NEW_INSTANCE" \
+    --query "data.lifecycle-state" --raw-output)
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install OCI CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install oci-cli
-
-      - name: Get or create an OCIR repository
-        uses: oracle-actions/get-ocir-repository@v1.3.0
-        id: get-ocir-repository
-        with:
-          name: cicd
-          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
-
-      - name: Log into OCIR
-        uses: oracle-actions/login-ocir@v1.3.0
-        with:
-          auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
-
-      - name: Determine new version tag
-        id: determine-version
-        run: |
-          if [ -f .version ]; then
-            VERSION=$(cat .version)
-            echo "Current version: $VERSION"
-          else
-            VERSION="v1.0.0"
-            echo "No version file found. Starting with version: $VERSION"
-          fi
-          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH + 1))
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Next version: $NEW_VERSION"
-          echo "$NEW_VERSION" > .version
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
-
-      - name: Commit version file
-        run: |
-          git config --local user.name "harishsp1996"
-          git config --local user.email "harish.sp.4196@gmail.com"
-          git add .version
-          git commit -m "Update version to $NEW_VERSION"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
-        run: |
-          VERSION="${{ env.VERSION }}"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Push Docker image to OCIR
-        run: |
-          VERSION="${{ env.VERSION }}"
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Delete previous container instance
-        run: |
-          CURRENT_VERSION=$(cat .version)
-          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))
-          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-
-          INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
-
-          if [ -n "$INSTANCE_ID" ]; then
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-            while true; do
-              STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$INSTANCE_ID" \
-                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-              if [ "$STATUS" == "DELETED" ]; then
-                break
-              fi
-              sleep 10
-            done
-          fi
-
-      - name: Create new container instance and validate
-        run: |
-          VERSION="${{ env.VERSION }}"
-          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-          INSTANCE_NAME="icsapp$VERSION"
-          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
-          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-          CONTAINER_JSON="[{
-            \"imageUrl\": \"$IMAGE_PATH\"
-          }]"
-
-          NEW_INSTANCE=$(oci container-instances container-instance create \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --availability-domain "$LOGICAL_AD" \
-            --shape "CI.Standard.E4.Flex" \
-            --shape-config "$SHAPE_CONFIG_JSON" \
-            --containers "$CONTAINER_JSON" \
-            --vnics "$VNIC_JSON" \
-            --display-name "$INSTANCE_NAME" \
-            --query "data.id" --raw-output)
-
-          while true; do
-            STATUS=$(oci container-instances container-instance get \
-              --container-instance-id "$NEW_INSTANCE" \
-              --query "data.lifecycle-state" --raw-output)
-
-            if [ "$STATUS" == "ACTIVE" ]; then
-              break
-            elif [ "$STATUS" == "FAILED" ]; then
-              oci container-instances container-instance delete --container-instance-id "$NEW_INSTANCE" --force
-              while true; do
-                DELETE_STATUS=$(oci container-instances container-instance get \
-                  --container-instance-id "$NEW_INSTANCE" \
-                  --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-                if [ "$DELETE_STATUS" == "DELETED" ]; then
-                  break
-                fi
-                sleep 10
-              done
-
-              # Revert to previous version
-              echo "$PREVIOUS_VERSION" > .version
-              git config --local user.name "harishsp1996"
-              git config --local user.email "harish.sp.4196@gmail.com"
-              git add .version
-              git commit -m "Revert version to $PREVIOUS_VERSION"
-              git push
-
-              docker rmi $IMAGE_PATH
-              docker pull ${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION
-
-              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
-              PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-              PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
-                --compartment-id "$OCI_COMPARTMENT_OCID" \
-                --availability-domain "$LOGICAL_AD" \
-                --shape "CI.Standard.E4.Flex" \
-                --shape-config "$SHAPE_CONFIG_JSON" \
-                --containers "[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]" \
-                --vnics "$VNIC_JSON" \
-                --display-name "$PREVIOUS_INSTANCE_NAME" \
-                --query "data.id" --raw-output)
-
-              while true; do
-                FINAL_STATUS=$(oci container-instances container-instance get \
-                  --container-instance-id "$PREVIOUS_INSTANCE" \
-                  --query "data.lifecycle-state" --raw-output)
-                if [ "$FINAL_STATUS" == "ACTIVE" ]; then
-                  break
-                fi
-                sleep 10
-              done
-              exit 1
-            fi
-            sleep 10
-          done
+  if [ "$STATUS" == "ACTIVE" ]; then
+    echo "Container instance is ACTIVE."
+    break
+  elif [ "$STATUS" == "FAILED" ]; then
+    echo "Container instance creation FAILED. Deleting..."
+    oci container-instances container-instance delete --container-instance-id "$NEW_INSTANCE" --force
+    while true; do
+      DELETE_STATUS=$(oci container-instances container-instance get \
+        --container-instance-id "$NEW_INSTANCE" \
+        --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+      if [ "$DELETE_STATUS" == "DELETED" ]; then
+        echo "Failed instance deleted successfully."
+        break
+      fi
+      sleep 10
+    done
+    exit 1
+  fi
+  echo "Current status: $STATUS. Retrying in 10 seconds..."
+  sleep 10
+done
