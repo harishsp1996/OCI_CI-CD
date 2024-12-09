@@ -252,6 +252,7 @@ jobs:
       - name: Send failure email
         if: failure()
         run: |
+          FAILED_STEP="${{ steps.<step_id>.name }}"  # Replace <step_id> with the actual ID of the step
           oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+           --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: $FAILED_STEP\"}"
 
