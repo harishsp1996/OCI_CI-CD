@@ -1,72 +1,47 @@
-name: Deploy Container and Check Status
+- name: Create new container instance and wait for status
+  run: |
+    VERSION="${{ env.VERSION }}"
+    IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+    INSTANCE_NAME="icsapp$VERSION"
+    SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+    VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+    CONTAINER_JSON="[{
+      \"imageUrl\": \"$IMAGE_PATH\"
+    }]"
 
-on:
-  push:
-    branches:
-      - main
+    NEW_INSTANCE=$(oci container-instances container-instance create \
+      --compartment-id "$OCI_COMPARTMENT_OCID" \
+      --availability-domain "$LOGICAL_AD" \
+      --shape "CI.Standard.E4.Flex" \
+      --shape-config "$SHAPE_CONFIG_JSON" \
+      --containers "$CONTAINER_JSON" \
+      --vnics "$VNIC_JSON" \
+      --display-name "$INSTANCE_NAME" \
+      --query "data.id" --raw-output)
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+    echo "Created new container instance with ID: $NEW_INSTANCE"
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    # Wait for instance to become ACTIVE or FAILED
+    while true; do
+      echo "Checking lifecycle state of $INSTANCE_NAME..."
+      STATUS=$(oci container-instances container-instance get \
+        --container-instance-id "$NEW_INSTANCE" \
+        --query "data.lifecycle-state" --raw-output)
 
-      - name: Set up OCI CLI
-        run: |
-          curl -sL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
-          export PATH=$PATH:/home/ubuntu/.oci-cli/bin
-          oci --version
+      echo "Current status: $STATUS"
+      if [[ "$STATUS" == "ACTIVE" || "$STATUS" == "FAILED" ]]; then
+        echo "Instance status: $STATUS"
+        break
+      fi
+      sleep 10
+    done
 
-      - name: Set environment variables
-        run: |
-          echo "OCI_COMPARTMENT_OCID=ocid1.compartment.oc1..aaaaaaaapeqpb7s6neeq7jnlby7ftkcn6se7g6soav5mzjzg2co3foauuctq" >> $GITHUB_ENV
-          echo "OCI_CLI_REGION=ap-mumbai-1" >> $GITHUB_ENV
-          echo "NEW_VERSION=icsappv1.0.6" >> $GITHUB_ENV
-          echo "INSTANCE_NAME=icsapp-instance" >> $GITHUB_ENV
-
-      - name: Create container instance
-        run: |
-          echo "Creating container instance with version $NEW_VERSION..."
-          NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id "$OCI_COMPARTMENT_OCID" --region "$OCI_CLI_REGION" --display-name "icsapp$NEW_VERSION" --image "your-image-ocid" --raw-output | jq -r '.data.id')
-          echo "Container instance created: $NEW_INSTANCE"
-
-      - name: Wait for instance lifecycle state to be ACTIVE or FAILED
-        run: |
-          echo "Waiting for instance $NEW_INSTANCE to reach ACTIVE or FAILED state..."
-
-          while true; do
-            STATUS=$(oci container-instances container-instance list \
-              --compartment-id "$OCI_COMPARTMENT_OCID" \
-              --region "$OCI_CLI_REGION" \
-              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$NEW_VERSION'") | .["lifecycle-state"]')
-
-            echo "Current status: $STATUS"
-
-            if [ "$STATUS" == "ACTIVE" ]; then
-              echo "Instance status is ACTIVE."
-              break
-            elif [ "$STATUS" == "FAILED" ]; then
-              echo "Instance creation failed."
-              break
-            elif [ -z "$STATUS" ]; then
-              echo "No status found for instance. Retrying..."
-            else
-              echo "Instance is still in progress, status: $STATUS"
-            fi
-
-            sleep 10
-          done
-
-      - name: Send success email
-        if: success()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
-
-      - name: Send failure email
-        if: failure()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+    if [ "$STATUS" == "ACTIVE" ]; then
+      # Send success email
+      oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+        --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
+    else
+      # Send failure email
+      oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+        --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+    fi
