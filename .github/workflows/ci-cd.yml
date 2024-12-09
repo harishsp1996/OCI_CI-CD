@@ -145,15 +145,15 @@ jobs:
             STATUS=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
-              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$NEW_VERSION'") | .["lifecycle-state"]')
+              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$VERSION'") | .["lifecycle-state"]')
 
             echo "Current status: $STATUS"
-            if [[ "$STATUS" == "ACTIVE" ]]; then
+            if [[ "$STATUS" == *"ACTIVE"* ]]; then
               echo "Instance is ACTIVE. Breaking loop."
               break
             fi
 
-            if [[ "$STATUS" == "FAILED" ]]; then
+            if [[ "$STATUS" == *"FAILED"* ]]; then
               echo "Instance failed. Breaking loop."
               break
             fi
