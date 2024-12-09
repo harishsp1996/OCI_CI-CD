@@ -234,3 +234,28 @@ jobs:
 
             sleep 10
           done
+
+      # Post-build action in case of failure
+      - name: Revert version file on failure
+        if: failure()
+        run: |
+          echo "Reverting version file to previous version: ${{ env.PREVIOUS_VERSION }}"
+          echo "${{ env.PREVIOUS_VERSION }}" > .version
+          git config --local user.name "harishsp1996"
+          git config --local user.email "harish.sp.4196@gmail.com"
+          git add .version
+          git commit -m "Revert version to ${{ env.PREVIOUS_VERSION }} after failed build"
+          git push
+        env:
+          PREVIOUS_VERSION: ${{ secrets.PREVIOUS_VERSION }}
+
+      - name: Send failure email
+        if: failure()
+        run: |
+          echo "Sending email notification about failure"
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{
+                  "subject": "Build Failed",
+                  "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."
+                }' \
+            ${{ secrets.EMAIL_API_URL }}
