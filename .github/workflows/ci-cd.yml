@@ -140,26 +140,29 @@ jobs:
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
           # Wait for instance to become ACTIVE or FAILED
+          LAST_STATUS="CREATING"
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
-            STATUS=$(oci container-instances container-instance list \
+            CURRENT_STATUS=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
               --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$VERSION'") | .["lifecycle-state"]')
 
-            echo "Current status: $STATUS"
-            if [[ "$STATUS" == "ACTIVE" ]]; then
-              echo "Instance status: ACTIVE"
-              # Send success email
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
-              break
-            elif [[ "$STATUS" == "FAILED" ]]; then
-              echo "Instance status: FAILED"
-              # Send failure email
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+            echo "Current status: $CURRENT_STATUS, Last status: $LAST_STATUS"
+            
+            if [[ "$CURRENT_STATUS" == "ACTIVE" && "$LAST_STATUS" == "DELETED" ]] || [[ "$CURRENT_STATUS" == "FAILED" && "$LAST_STATUS" == "DELETED" ]]; then
+              echo "Status transition met: Breaking the loop."
+              # Send success or failure email
+              if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
+                oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                  --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
+              else
+                oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                  --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+              fi
               break
             fi
+
+            LAST_STATUS="$CURRENT_STATUS"
             sleep 10
           done
