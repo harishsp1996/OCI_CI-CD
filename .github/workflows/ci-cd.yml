@@ -51,9 +51,9 @@ jobs:
       - name: Determine new version tag
         id: determine-version
         run: |
-          if [ -if .version ]; then
-            VERSION=$(cat version)
-            echo "Current version: VERSION"
+          if [ -f .version ]; then
+            VERSION=$(cat .version)
+            echo "Current version: $VERSION"
           else
             VERSION="v1.0.121"
             echo "No version file found. Starting with version: $VERSION"
@@ -94,7 +94,7 @@ jobs:
           CURRENT_VERSION=$(cat .version)
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((ATCH - 1))
+          PATCH=$((PATCH - 1))
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
           PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
 
@@ -254,8 +254,5 @@ jobs:
         run: |
           echo "Sending email notification about failure"
           curl -X POST -H "Content-Type: application/json" \
-            -d '{
-                  "subject": "Build Failed",
-                  "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."
-                }' \
+            -d '{"subject": "Build Failed", "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."}' \
             ${{ secrets.EMAIL_API_URL }}
