@@ -150,18 +150,16 @@ jobs:
             echo "Current status: $STATUS"
             if [[ "$STATUS" == "ACTIVE" ]]; then
               echo "Instance status: ACTIVE"
+              # Send success email
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
               break
             elif [[ "$STATUS" == "FAILED" ]]; then
               echo "Instance status: FAILED"
+              # Send failure email
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
               break
             fi
             sleep 10
           done
-
-          # Send success email if ACTIVE, otherwise send failure email
-          if [ "$STATUS" == "ACTIVE" ]; then
-            oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-              --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
-          else
-            oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-              --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
