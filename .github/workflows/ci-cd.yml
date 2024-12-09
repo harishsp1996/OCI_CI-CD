@@ -137,37 +137,25 @@ jobs:
             --display-name "$INSTANCE_NAME" \
             --query "data.id" --raw-output)
 
-          # Wait for the display name to appear in the container instance list
           while true; do
             DISPLAY_NAME=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
-              --raw-output | jq -r '.data.items[] | select(."display-name" == "'$INSTANCE_NAME'") | .["display-name"]')
+              --raw-output | jq -r '.data.items[] | select(."display-name" == "'$INSTANCE_NAME'") | ."display-name"')
 
             if [ "$DISPLAY_NAME" == "$INSTANCE_NAME" ]; then
-              break
+              STATUS=$(oci container-instances container-instance get \
+                --container-instance-id "$NEW_INSTANCE" \
+                --query "data.lifecycle-state" --raw-output)
+              if [ "$STATUS" == "ACTIVE" ]; then
+                oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                  --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
+                break
+              elif [ "$STATUS" == "FAILED" ]; then
+                oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                  --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+                break
+              fi
             fi
-            sleep 10
-          done
-
-          # Now that the display name is confirmed, check the lifecycle state
-          while true; do
-            STATUS=$(oci container-instances container-instance get \
-              --container-instance-id "$NEW_INSTANCE" \
-              --query "data.lifecycle-state" --raw-output)
-            
-            # Check the lifecycle state
-            if [ "$STATUS" == "ACTIVE" ]; then
-              # Send success email notification
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"success\", \"version\": \"$NEW_VERSION\", \"message\": \"Build and deployment successful.\"}"
-              break
-            elif [ "$STATUS" == "FAILED" ]; then
-              # Send failure email notification
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
-              break
-            fi
-
             sleep 10
           done
