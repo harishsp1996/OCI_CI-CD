@@ -94,7 +94,7 @@ jobs:
           CURRENT_VERSION=$(cat .version)
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))
+          PATCH=$((ATCH - 1))
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
           PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
 
