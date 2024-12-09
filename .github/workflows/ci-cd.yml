@@ -30,10 +30,10 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install OCI CLI and jq
+      - name: Install OCI CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip jq
+          sudo apt-get install -y python3-pip
           pip3 install oci-cli
 
       - name: Get or create an OCIR repository
@@ -107,7 +107,8 @@ jobs:
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
             while true; do
               STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$INSTANCE_ID" 2>/dev/null | jq -r '.data.lifecycle-state' || echo "DELETED")
+                --container-instance-id "$INSTANCE_ID" 2>/dev/null | \
+                jq -r '.data.lifecycle-state' || echo "DELETED")
               if [ "$STATUS" == "DELETED" ]; then
                 break
               fi
@@ -133,7 +134,8 @@ jobs:
             --shape-config "$SHAPE_CONFIG_JSON" \
             --containers "$CONTAINER_JSON" \
             --vnics "$VNIC_JSON" \
-            --display-name "$INSTANCE_NAME" | jq -r '.data.id')
+            --display-name "$INSTANCE_NAME" | \
+            jq -r '.data.id')
 
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
@@ -142,7 +144,8 @@ jobs:
             echo "Checking lifecycle state of $INSTANCE_NAME..."
 
             CURRENT_STATUS=$(oci container-instances container-instance get \
-              --container-instance-id "$NEW_INSTANCE" | jq -r '.data.lifecycle-state')
+              --container-instance-id "$NEW_INSTANCE" | \
+              jq -r '.data.lifecycle-state')
 
             echo "Current status: $CURRENT_STATUS"
 
