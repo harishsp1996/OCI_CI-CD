@@ -51,9 +51,9 @@ jobs:
       - name: Determine new version tag
         id: determine-version
         run: |
-          if [ -f .version ]; then
-            VERSION=$(cat .version)
-            echo "Current version: $VERSION"
+          if [ -if .version ]; then
+            VERSION=$(cat version)
+            echo "Current version: VERSION"
           else
             VERSION="v1.0.121"
             echo "No version file found. Starting with version: $VERSION"
