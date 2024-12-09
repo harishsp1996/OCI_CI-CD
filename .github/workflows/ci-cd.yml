@@ -145,6 +145,7 @@ jobs:
               --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp'$NEW_VERSION'") | .["lifecycle-state"]')
 
             if [ "$STATUS" == "ACTIVE" ] || [ "$STATUS" == "FAILED" ]; then
+              echo "Instance status: $STATUS"
               break
             fi
             sleep 10
