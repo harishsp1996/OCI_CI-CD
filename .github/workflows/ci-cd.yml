@@ -15,7 +15,7 @@ jobs:
 
       - name: Set up OCI CLI
         run: |
-          curl -sL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash
+          curl -sL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
           export PATH=$PATH:/home/ubuntu/.oci-cli/bin
           oci --version
 
@@ -29,7 +29,6 @@ jobs:
       - name: Create container instance
         run: |
           echo "Creating container instance with version $NEW_VERSION..."
-          # Replace with actual OCI container instance creation command
           NEW_INSTANCE=$(oci container-instances container-instance create --compartment-id "$OCI_COMPARTMENT_OCID" --region "$OCI_CLI_REGION" --display-name "icsapp$NEW_VERSION" --image "your-image-ocid" --raw-output | jq -r '.data.id')
           echo "Container instance created: $NEW_INSTANCE"
 
@@ -38,7 +37,6 @@ jobs:
           echo "Waiting for instance $NEW_INSTANCE to reach ACTIVE or FAILED state..."
 
           while true; do
-            # Fetch the lifecycle state of the container instance using jq
             STATUS=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
