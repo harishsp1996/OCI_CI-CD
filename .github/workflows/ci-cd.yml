@@ -252,7 +252,6 @@ jobs:
       - name: Send failure email
         if: failure()
         run: |
-          echo "Sending email notification about failure"
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{"subject": "Build Failed", "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."}' \
-            ${{ secrets.EMAIL_API_URL }}
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+
