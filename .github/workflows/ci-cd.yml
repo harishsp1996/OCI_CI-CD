@@ -19,7 +19,7 @@ jobs:
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCIR_REGISTRY: ${{ secrets.OCI_REGISTRY }}
+      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
       OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
       LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
       SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
@@ -55,7 +55,7 @@ jobs:
             VERSION=$(cat .version)
             echo "Current version: $VERSION"
           else
-            VERSION="v1.0.121"
+            VERSION="v1.0.0"
             echo "No version file found. Starting with version: $VERSION"
           fi
           BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
@@ -68,7 +68,7 @@ jobs:
 
       - name: Commit version file
         run: |
-          git config --local user.name "harishsp96"
+          git config --local user.name "harishsp1996"
           git config --local user.email "harish.sp.4196@gmail.com"
           git add .version
           git commit -m "Update version to $NEW_VERSION"
@@ -86,8 +86,8 @@ jobs:
       - name: Push Docker image to OCIR
         run: |
           VERSION="${{ env.VERSION }}"
-          docker pu ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker pu ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
+          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
       - name: Delete previous container instance
         run: |
@@ -252,7 +252,10 @@ jobs:
       - name: Send failure email
         if: failure()
         run: |
-          FAILED_STEP="${{ steps.<step_id>.name }}"  # Replace <step_id> with the actual ID of the step
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-           --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: $FAILED_STEP\"}"
-
+          echo "Sending email notification about failure"
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{
+                  "subject": "Build Failed",
+                  "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."
+                }' \
+            ${{ secrets.EMAIL_API_URL }}
