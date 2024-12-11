@@ -121,7 +121,7 @@ jobs:
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
           INSTANCE_NAME="icsapp$VERSION"
-          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          SHAPE_CONFIG_JSON='{"ocpus": 1, "memoryInGBs": 0.1}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
             \"imageUrl\": \"$IMAGE_PATH\"
@@ -157,7 +157,7 @@ jobs:
             elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
               echo "Status FAILED found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"No worries, I am going to revert to the previous container image.\"}"
 
               # Start reverting process
               echo "No worries, I am going to revert to the previous container image."
@@ -180,7 +180,13 @@ jobs:
                   sleep 10
                 done
               fi
-
+              # Remove the existing image from OCIR
+              IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+              echo "Removing the existing image: $IMAGE_PATH"
+              oci artifacts container image delete \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --image-id "$IMAGE_PATH" --force
+				
               # Revert the version to the previous one
               PREVIOUS_VERSION="v$MAJOR.$MINOR.$((PATCH - 1))"
               echo "Reverting to previous version: $PREVIOUS_VERSION"
