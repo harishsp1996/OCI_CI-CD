@@ -121,7 +121,7 @@ jobs:
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
           INSTANCE_NAME="icsapp$VERSION"
-          SHAPE_CONFIG_JSON='{"ocpus": 1, "memoryInGBs": 0.1}'
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
             \"imageUrl\": \"$IMAGE_PATH\"
@@ -180,23 +180,19 @@ jobs:
                   sleep 10
                 done
               fi
+
               # Remove the existing image from OCIR
               IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
               echo "Removing the existing image: $IMAGE_PATH"
               oci artifacts container image delete \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
                 --image-id "$IMAGE_PATH" --force
-				
+
               # Revert the version to the previous one
               PREVIOUS_VERSION="v$MAJOR.$MINOR.$((PATCH - 1))"
               echo "Reverting to previous version: $PREVIOUS_VERSION"
               echo "$PREVIOUS_VERSION" > .version
               echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
-
-              # Delete the image from OCIR
-              oci artifact repository delete \
-                --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
-                --tag "$VERSION" --force
 
               # Recreate container with previous version
               PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
