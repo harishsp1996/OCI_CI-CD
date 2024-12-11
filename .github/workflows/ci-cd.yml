@@ -207,7 +207,7 @@ jobs:
               fi
 
               # Recreate container with previous version
-              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
+              PREVIOUS_IMAGE_PATH="bom.ocir.io/bmuywhflti2k/***:$PREVIOUS_VERSION"
               INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
               NEW_INSTANCE=$(oci container-instances container-instance create \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
@@ -223,7 +223,6 @@ jobs:
 
               # Wait for instance to become ACTIVE
               while true; do
-                echo "Checking lifecycle state of previous instance..."
                 CURRENT_STATUS=$(oci container-instances container-instance list \
                   --compartment-id "$OCI_COMPARTMENT_OCID" \
                   --region "$OCI_CLI_REGION" \
@@ -235,6 +234,11 @@ jobs:
                   echo "Reverted container is ACTIVE."
                   oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                     --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version successfully.\"}"
+                  break
+                elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
+                  echo "Reverted container failed."
+                  oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                    --body "{\"status\": \"failure\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Revert failed.\"}"
                   break
                 fi
 
