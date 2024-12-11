@@ -121,7 +121,7 @@ jobs:
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
           INSTANCE_NAME="icsapp$VERSION"
-          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 0}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
             \"imageUrl\": \"$IMAGE_PATH\"
