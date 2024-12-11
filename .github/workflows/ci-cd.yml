@@ -188,9 +188,23 @@ jobs:
               echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
 
               # Delete the image from OCIR
-              oci artifact repository delete \
-                --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
-                --tag "$VERSION" --force
+              echo "Deleting Docker image version $VERSION from OCIR registry..."
+              IMAGE_OCID=$(oci artifacts container image list \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --query "data[?contains('display-name', '$VERSION')].id | [0]" \
+                --raw-output)
+
+              echo "Found IMAGE_OCID: $IMAGE_OCID"
+
+              if [[ -n "$IMAGE_OCID" ]]; then
+                echo "Image OCID for version $VERSION found: $IMAGE_OCID. Deleting..."
+                oci artifacts container image delete \
+                  --image-id "$IMAGE_OCID" \
+                  --force
+                echo "Image version $VERSION deleted successfully."
+              else
+                echo "No image found for version $VERSION. Skipping deletion."
+              fi
 
               # Recreate container with previous version
               PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
@@ -234,42 +248,5 @@ jobs:
 
             sleep 10
           done
-
-      - name: Send failure email
-        if: failure()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
-
-      - name: Revert version file on failure
-        if: failure()
-        run: |
-          # Revert the version to the previous one if build fails
-          CURRENT_VERSION=$(cat .version)
-          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))
-          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Reverting to previous version: $PREVIOUS_VERSION"
-          echo "$PREVIOUS_VERSION" > .version
-          echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
-
-      - name: Delete Docker image from OCIR
-        run: |
-          VERSION="${{ env.VERSION }}"
-          echo "Deleting Docker image version $VERSION from OCIR registry..."
-
-          IMAGE_OCID=$(oci artifacts container image list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --query "data[?contains('display-name', '$VERSION')].id | [0]" \
-            --raw-output)
-
-          if [[ -n "$IMAGE_OCID" ]]; then
-            echo "Image OCID for version $VERSION found: $IMAGE_OCID. Deleting..."
-            oci artifacts container image delete \
-              --image-id "$IMAGE_OCID" \
-              --force
-            echo "Image version $VERSION deleted successfully."
-          else
-            echo "No image found for version $VERSION. Skipping deletion."
-          fi
+	
+      # Additional steps...
