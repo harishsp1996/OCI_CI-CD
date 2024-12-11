@@ -118,30 +118,159 @@ jobs:
 
       - name: Create new container instance and wait for status
         run: |
-          # Add container creation and monitoring logic here.
+          VERSION="${{ env.VERSION }}"
+          IMAGE_PATH="oci://invalid-repo/invalid-image:$VERSION"
+          INSTANCE_NAME="icsapp$VERSION"
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+          CONTAINER_JSON="[{
+            \"imageUrl\": \"$IMAGE_PATH\"
+          }]"
 
+          NEW_INSTANCE=$(oci container-instances container-instance create \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --availability-domain "$LOGICAL_AD" \
+            --shape "CI.Standard.E4.Flex" \
+            --shape-config "$SHAPE_CONFIG_JSON" \
+            --containers "$CONTAINER_JSON" \
+            --vnics "$VNIC_JSON" \
+            --display-name "$INSTANCE_NAME" \
+            --query "data.id" --raw-output)
+
+          echo "Created new container instance with ID: $NEW_INSTANCE"
+
+          # Wait for instance to become ACTIVE or FAILED
+          while true; do
+            echo "Checking lifecycle state of $INSTANCE_NAME..."
+            CURRENT_STATUS=$(oci container-instances container-instance list \
+              --compartment-id "$OCI_COMPARTMENT_OCID" \
+              --region "$OCI_CLI_REGION" \
+              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
+
+            echo "Current status: $CURRENT_STATUS"
+
+            if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
+              echo "Status ACTIVE found, breaking the loop."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
+              break
+            elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
+              echo "Status FAILED found, breaking the loop."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
+
+              # Start reverting process
+              echo "No worries, I am going to revert to the previous container image."
+
+              # Delete the failed container instance
+              FAILED_INSTANCE_ID=$(oci container-instances container-instance list \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --region "$OCI_CLI_REGION" \
+                --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'" and .["lifecycle-state"] == "FAILED") | .id')
+
+              if [ -n "$FAILED_INSTANCE_ID" ]; then
+                oci container-instances container-instance delete --container-instance-id "$FAILED_INSTANCE_ID" --force
+                while true; do
+                  STATUS=$(oci container-instances container-instance get \
+                    --container-instance-id "$FAILED_INSTANCE_ID" \
+                    --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+                  if [ "$STATUS" == "DELETED" ]; then
+                    break
+                  fi
+                  sleep 10
+                done
+              fi
+
+              # Revert the version to the previous one
+              PREVIOUS_VERSION="v$MAJOR.$MINOR.$((PATCH - 1))"
+              echo "Reverting to previous version: $PREVIOUS_VERSION"
+              echo "$PREVIOUS_VERSION" > .version
+              echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
+
+              # Delete the image from OCIR
+              oci artifact repository delete \
+                --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
+                --tag "$VERSION" --force
+
+              # Recreate container with previous version
+              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
+              INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+              NEW_INSTANCE=$(oci container-instances container-instance create \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --availability-domain "$LOGICAL_AD" \
+                --shape "CI.Standard.E4.Flex" \
+                --shape-config "$SHAPE_CONFIG_JSON" \
+                --containers "[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]" \
+                --vnics "$VNIC_JSON" \
+                --display-name "$INSTANCE_NAME" \
+                --query "data.id" --raw-output)
+
+              echo "Created new container instance with previous image, ID: $NEW_INSTANCE"
+
+              # Wait for instance to become ACTIVE
+              while true; do
+                echo "Checking lifecycle state of previous instance..."
+                CURRENT_STATUS=$(oci container-instances container-instance list \
+                  --compartment-id "$OCI_COMPARTMENT_OCID" \
+                  --region "$OCI_CLI_REGION" \
+                  --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
+
+                echo "Current status: $CURRENT_STATUS"
+
+                if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
+                  echo "Reverted container is ACTIVE."
+                  oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                    --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version successfully.\"}"
+                  break
+                fi
+
+                sleep 10
+              done
+
+              break
+            else
+              echo "Ignoring status: $CURRENT_STATUS"
+            fi
+
+            sleep 10
+          done
+	
+      # Post-build action in case of failure
       - name: Send failure email
         if: failure()
         run: |
           oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
             --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
 
-      - name: Delete image from OCIR if existed
+      - name: Revert version file on failure
         if: failure()
+        run: |
+          # Revert the version to the previous one if build fails
+          CURRENT_VERSION=$(cat .version)
+          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH - 1))
+          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "Reverting to previous version: $PREVIOUS_VERSION"
+          echo "$PREVIOUS_VERSION" > .version
+          echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
+
+      - name: Delete Docker image from OCIR
         run: |
           VERSION="${{ env.VERSION }}"
           echo "Deleting Docker image version $VERSION from OCIR registry..."
 
-          EXISTING_IMAGE=$(oci artifact repository list \
-            --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
-            --query "data[?contains(name, '$VERSION')].name | [0]" \
+          IMAGE_OCID=$(oci artifacts container image list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --query "data[?contains('display-name', '$VERSION')].id | [0]" \
             --raw-output)
 
-          if [[ -n "$EXISTING_IMAGE" ]]; then
-            echo "Image $VERSION found. Deleting..."
-            oci artifact repository delete \
-              --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
-              --tag "$VERSION" --force
+          if [[ -n "$IMAGE_OCID" ]]; then
+            echo "Image OCID for version $VERSION found: $IMAGE_OCID. Deleting..."
+            oci artifacts container image delete \
+              --image-id "$IMAGE_OCID" \
+              --force
+            echo "Image version $VERSION deleted successfully."
           else
             echo "No image found for version $VERSION. Skipping deletion."
           fi
