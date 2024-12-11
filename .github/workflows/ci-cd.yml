@@ -248,5 +248,3 @@ jobs:
 
             sleep 10
           done
-	
-      # Additional steps...
