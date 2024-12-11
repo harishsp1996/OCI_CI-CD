@@ -55,7 +55,7 @@ jobs:
             VERSION=$(cat .version)
             echo "Current version: $VERSION"
           else
-            VERSION="v1.0.0.0"
+            VERSION="v1.0.0"
             echo "No version file found. Starting with version: $VERSION"
           fi
           BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
@@ -235,6 +235,7 @@ jobs:
             sleep 10
           done
 
+
       # Post-build action in case of failure
       - name: Revert version file on failure
         if: failure()
@@ -252,10 +253,21 @@ jobs:
       - name: Send failure email
         if: failure()
         run: |
-          echo "Sending email notification about failure"
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{
-                  "subject": "Build Failed",
-                  "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."
-                }' \
-            ${{ secrets.EMAIL_API_URL }}
+          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+            --body "{\"status\": \"failure\", \"version\": \"$NEW_VERSION\", \"message\": \"Build failed at step: ${{ job.status }}\"}"
+			
+      - name: Delete image from OCIR if push failed
+        if: failure()
+        run: |
+          VERSION="${{ env.VERSION }}"
+          echo "Deleting Docker image version $VERSION from OCIR registry..."
+          
+          # Check if the image exists before deleting
+          EXISTING_IMAGE=$(oci os object list --bucket-name ${{ steps.get-ocir-repository.outputs.repo_path }} --prefix "$VERSION" --query "data.items[0].name" --raw-output)
+          
+          if [[ -n "$EXISTING_IMAGE" ]]; then
+            echo "Image $VERSION found. Deleting..."
+            oci os object delete --bucket-name ${{ steps.get-ocir-repository.outputs.repo_path }} --name "$VERSION" --force
+          else
+            echo "No image found for version $VERSION. Skipping deletion."
+          fi
