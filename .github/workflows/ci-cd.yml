@@ -256,8 +256,5 @@ jobs:
         run: |
           echo "Sending email notification about failure"
           curl -X POST -H "Content-Type: application/json" \
-            -d '{
-                  "subject": "Build Failed",
-                  "body": "The build failed during step: '${{ github.event_name }} - ${{ github.workflow }} - ${{ github.job }}' (Step: ${{ github.step }}), with version ${{ env.VERSION }}."
-                }' \
-            ${{ secrets.EMAIL_API_URL }}
+            -d "{\"subject\": \"Build Failed\", \"body\": \"The build failed during step: ${GITHUB_EVENT_NAME} - ${GITHUB_WORKFLOW} - ${GITHUB_JOB} (Step: ${GITHUB_STEP_NAME}), with version ${VERSION}.\"}" \
+           ${{ secrets.EMAIL_API_URL }}
