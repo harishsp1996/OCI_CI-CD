@@ -234,8 +234,7 @@ jobs:
 
             sleep 10
           done
-	
-      # Post-build action in case of failure
+
       - name: Send failure email
         if: failure()
         run: |
