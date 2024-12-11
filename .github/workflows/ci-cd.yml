@@ -1,4 +1,4 @@
-name: Build, Tag, Push Docker Image, and Manage OCI Container
+name: Build, Push, and Manage Container Instances
 
 on:
   push:
@@ -7,87 +7,32 @@ on:
 
 jobs:
   build-publish-manage:
-    name: Build, Push Docker Image, and Manage OCI Container
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    env:
-      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-      OCIR_REGISTRY: ${{ secrets.OCIR_REGISTRY }}
-      OCI_AUTH_TOKEN: ${{ secrets.OCI_AUTH_TOKEN }}
-      LOGICAL_AD: ${{ secrets.LOGICAL_AD }}
-      SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-      - name: Install OCI CLI
+      - name: Set up OCI CLI
+        uses: oracle-actions/setup-oci-cli@v1
+        with:
+          oci-version: '3.x'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push Docker image to OCIR
+        id: build-push
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install oci-cli
+          VERSION="${{ github.sha }}"
+          IMAGE_PATH="oci://$OCI_REGISTRY/$OCI_REPO:$VERSION"
+          echo "Building and pushing image to $IMAGE_PATH..."
+          docker build -t $IMAGE_PATH .
+          docker push $IMAGE_PATH
 
-      - name: Get or create an OCIR repository
-        uses: oracle-actions/get-ocir-repository@v1.3.0
+      - name: Get OCIR repository path
         id: get-ocir-repository
-        with:
-          name: cicd
-          compartment: ${{ secrets.OCI_COMPARTMENT_OCID }}
-
-      - name: Log into OCIR
-        uses: oracle-actions/login-ocir@v1.3.0
-        with:
-          auth_token: ${{ secrets.OCI_AUTH_TOKEN }}
-
-      - name: Determine new version tag
-        id: determine-version
-        run: |
-          if [ -f .version ]; then
-            VERSION=$(cat .version)
-            echo "Current version: $VERSION"
-          else
-            VERSION="v1.0.0"
-            echo "No version file found. Starting with version: $VERSION"
-          fi
-          BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH + 1))
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Next version: $NEW_VERSION"
-          echo "$NEW_VERSION" > .version
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
-
-      - name: Commit version file
-        run: |
-          git config --local user.name "harishsp1996"
-          git config --local user.email "harish.sp.4196@gmail.com"
-          git add .version
-          git commit -m "Update version to $NEW_VERSION"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Docker image
-        run: |
-          VERSION="${{ env.VERSION }}"
-          docker buildx build --platform linux/amd64 -t cicd:$VERSION .
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
-
-      - name: Push Docker image to OCIR
-        run: |
-          VERSION="${{ env.VERSION }}"
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
-          docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+        run: echo "REPO_PATH=oci://$OCI_REGISTRY/$OCI_REPO" >> $GITHUB_ENV
 
       - name: Delete previous container instance
         run: |
@@ -119,7 +64,7 @@ jobs:
       - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
-          IMAGE_PATH="oci://invalid-repo/invalid-image:$VERSION"
+          IMAGE_PATH="oci://$OCI_REGISTRY/$OCI_REPO:$VERSION"
           INSTANCE_NAME="icsapp$VERSION"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
@@ -218,20 +163,14 @@ jobs:
                 echo "Current status: $CURRENT_STATUS"
 
                 if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
-                  echo "Reverted container is ACTIVE."
-                  oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                    --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version successfully.\"}"
+                  echo "Status ACTIVE found, breaking the loop."
                   break
                 fi
-
                 sleep 10
               done
 
               break
-            else
-              echo "Ignoring status: $CURRENT_STATUS"
             fi
-
             sleep 10
           done
 
@@ -247,13 +186,19 @@ jobs:
         run: |
           VERSION="${{ env.VERSION }}"
           echo "Deleting Docker image version $VERSION from OCIR registry..."
-          
+
           # Check if the image exists before deleting
-          EXISTING_IMAGE=$(oci os object list --bucket-name ${{ steps.get-ocir-repository.outputs.repo_path }} --prefix "$VERSION" --query "data.items[0].name" --raw-output)
-          
+          EXISTING_IMAGE=$(oci artifact repository list \
+            --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
+            --query "data[?contains(name, '$VERSION')].name | [0]" \
+            --raw-output)
+
           if [[ -n "$EXISTING_IMAGE" ]]; then
             echo "Image $VERSION found. Deleting..."
-            oci os object delete --bucket-name ${{ steps.get-ocir-repository.outputs.repo_path }} --name "$VERSION" --force
+            oci artifact repository delete \
+              --repository-id ${{ steps.get-ocir-repository.outputs.repo_path }} \
+              --tag "$VERSION" --force
           else
             echo "No image found for version $VERSION. Skipping deletion."
-          fi
+        env:
+          OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
