@@ -119,7 +119,7 @@ jobs:
       - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
-          IMAGE_PATH="oci://invalid-repo/invalid-image:$VERSION"
+          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
           INSTANCE_NAME="icsapp$VERSION"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
