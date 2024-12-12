@@ -174,10 +174,18 @@ jobs:
                 done
               fi
 
-              PREVIOUS_VERSION="v$MAJOR.$MINOR.$((PATCH - 1))"
-              echo "Reverting to previous version: $PREVIOUS_VERSION"
-              echo "$PREVIOUS_VERSION" > .version
-              echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
+              - name: Revert version file to previous version (on failure)
+        run: |
+          echo "Reverting version file to previous version: ${{ env.PREVIOUS_VERSION }}"
+          echo "${{ env.PREVIOUS_VERSION }}" > .version
+          git config --local user.name "harishsp1996"
+          git config --local user.email "harish.sp.4196@gmail.com"
+          git add .version
+          git commit -m "Revert version to ${{ env.PREVIOUS_VERSION }} after failed build"
+          git push
+        if: failure()  # This step runs only if previous steps fail
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
               sleep 10
 
