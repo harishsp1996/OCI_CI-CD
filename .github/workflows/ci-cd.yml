@@ -91,48 +91,29 @@ jobs:
 
       - name: Delete previous container instance
         run: |
-          # Fetch the current version from the .version file
           CURRENT_VERSION=$(cat .version)
-          echo "Current version: $CURRENT_VERSION"
-
-          # Calculate previous version (e.g., v1.0.1 -> v1.0.0)
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))  # Decrement the patch version to get previous version
+          PATCH=$((PATCH - 1))
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "Previous version: $PREVIOUS_VERSION"
+          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
 
-          # Build the previous version's container instance name
-          PREVIOUS_INSTANCE_NAME="icsapplication-${PREVIOUS_VERSION}"
-
-          # Query OCI for the instance ID using the previous version name
           INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id $OCI_COMPARTMENT_OCID \
-            --display-name "$PREVIOUS_INSTANCE_NAME" \
-            --query "data[0].id" --raw-output)
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --region "$OCI_CLI_REGION" \
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
 
           if [ -n "$INSTANCE_ID" ]; then
-            echo "Deleting previous container instance with ID: $INSTANCE_ID"
-            
-            # Delete the previous container instance using its ID
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-
-            # Wait until the deletion is complete
-            echo "Waiting for the deletion to complete..."
             while true; do
               STATUS=$(oci container-instances container-instance get \
                 --container-instance-id "$INSTANCE_ID" \
                 --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-              
               if [ "$STATUS" == "DELETED" ]; then
-                echo "Previous instance successfully deleted."
                 break
               fi
-              echo "Current status: $STATUS. Retrying in 10 seconds..."
               sleep 10
             done
-          else
-            echo "No container instance found with name: $PREVIOUS_INSTANCE_NAME"
           fi
 
       - name: Create new container instance and wait for status
