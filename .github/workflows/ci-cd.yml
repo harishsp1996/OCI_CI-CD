@@ -190,13 +190,13 @@ jobs:
                 echo "Previous status: $PREVIOUS_STATUS"
 
                 # Check if the previous status contains "ACTIVE" or "DELETED ACTIVE"
-                if [[ "$PREVIOUS_STATUS" == *"ACTIVE"* ]]; then
+                if [[ "$CURRENT_STATUS" == *"ACTIVE"* || "$CURRENT_STATUS" == *"DELETED ACTIVE"* ]]; then
                   echo "Previous instance is ACTIVE (or DELETED ACTIVE). Breaking the loop."
                   oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                     --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version, build and deployment successful.\"}"
                   break
                 # Check if the previous status contains "FAILED" or "DELETED FAILED"
-                elif [[ "$PREVIOUS_STATUS" == *"FAILED"* ]]; then
+                elif [[ "$CURRENT_STATUS" == *"FAILED"* || "$CURRENT_STATUS" == *"DELETED FAILED"* ]]; then
                   echo "Previous instance is in FAILED state (or DELETED FAILED). Retrying..."
                   sleep 10
                 fi
