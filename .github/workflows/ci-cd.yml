@@ -136,91 +136,91 @@ jobs:
           fi
 
       - name: Create new container instance and wait for status
-  run: |
-    VERSION="${{ env.VERSION }}"
-    IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-    INSTANCE_NAME="icsapp$VERSION"
-    SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
-    VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-    CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
+        run: |
+          VERSION="${{ env.VERSION }}"
+          IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
+          INSTANCE_NAME="icsapp$VERSION"
+          SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
+          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+          CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
 
-    # Create the new container instance with the current image version
-    NEW_INSTANCE=$(oci container-instances container-instance create \
-      --compartment-id "$OCI_COMPARTMENT_OCID" \
-      --availability-domain "$LOGICAL_AD" \
-      --shape "CI.Standard.E4.Flex" \
-      --shape-config "$SHAPE_CONFIG_JSON" \
-      --containers "$CONTAINER_JSON" \
-      --vnics "$VNIC_JSON" \
-      --display-name "$INSTANCE_NAME" \
-      --query "data.id" --raw-output)
-
-    echo "Created new container instance with ID: $NEW_INSTANCE"
-
-    while true; do
-      echo "Checking lifecycle state of $INSTANCE_NAME..."
-      CURRENT_STATUS=$(oci container-instances container-instance list \
-        --compartment-id "$OCI_COMPARTMENT_OCID" \
-        --region "$OCI_CLI_REGION" \
-        --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
-
-      echo "Current status: $CURRENT_STATUS"
-
-      # Check if the status contains ACTIVE or DELETED ACTIVE
-      if [[ "$CURRENT_STATUS" == *"ACTIVE"* ]]; then
-        echo "Status ACTIVE (or DELETED ACTIVE) found, breaking the loop."
-        oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-          --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
-        break
-      # Check if the status contains FAILED or DELETED FAILED
-      elif [[ "$CURRENT_STATUS" == *"FAILED"* ]]; then
-        echo "Status FAILED (or DELETED FAILED) found, reverting to previous image (n-1)."
-
-        # Determine previous version (n-1)
-        BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-        PATCH=$((PATCH - 1))
-        PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-        PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
-        INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-
-        echo "Reverting to previous image: $PREVIOUS_IMAGE_PATH"
-
-        # Create the container instance with the previous image (n-1)
-        PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
-          --compartment-id "$OCI_COMPARTMENT_OCID" \
-          --availability-domain "$LOGICAL_AD" \
-          --shape "CI.Standard.E4.Flex" \
-          --shape-config "$SHAPE_CONFIG_JSON" \
-          --containers "[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]" \
-          --vnics "$VNIC_JSON" \
-          --display-name "$INSTANCE_NAME" \
-          --query "data.id" --raw-output)
-
-        echo "Created new container instance with previous image (n-1) with ID: $PREVIOUS_INSTANCE"
-
-        # Wait for the previous instance to become ACTIVE
-        while true; do
-          PREVIOUS_STATUS=$(oci container-instances container-instance list \
+          # Create the new container instance with the current image version
+          NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp$PREVIOUS_VERSION") | .["lifecycle-state"]')
+            --availability-domain "$LOGICAL_AD" \
+            --shape "CI.Standard.E4.Flex" \
+            --shape-config "$SHAPE_CONFIG_JSON" \
+            --containers "$CONTAINER_JSON" \
+            --vnics "$VNIC_JSON" \
+            --display-name "$INSTANCE_NAME" \
+            --query "data.id" --raw-output)
 
-          echo "Previous status: $PREVIOUS_STATUS"
+          echo "Created new container instance with ID: $NEW_INSTANCE"
 
-          # Check if the previous status contains "ACTIVE" or "DELETED ACTIVE"
-          if [[ "$PREVIOUS_STATUS" == *"ACTIVE"* ]]; then
-            echo "Previous instance is ACTIVE (or DELETED ACTIVE). Breaking the loop."
-            oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-              --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version, build and deployment successful.\"}"
-            break
-          # Check if the previous status contains "FAILED" or "DELETED FAILED"
-          elif [[ "$PREVIOUS_STATUS" == *"FAILED"* ]]; then
-            echo "Previous instance is in FAILED state (or DELETED FAILED). Retrying..."
-            sleep 10
-          fi
-        done
-        break
-      fi
-      sleep 10
-    done
+          while true; do
+            echo "Checking lifecycle state of $INSTANCE_NAME..."
+            CURRENT_STATUS=$(oci container-instances container-instance list \
+              --compartment-id "$OCI_COMPARTMENT_OCID" \
+              --region "$OCI_CLI_REGION" \
+              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
+
+            echo "Current status: $CURRENT_STATUS"
+
+            # Check if the status contains ACTIVE or DELETED ACTIVE
+            if [[ "$CURRENT_STATUS" == *"ACTIVE"* ]]; then
+              echo "Status ACTIVE (or DELETED ACTIVE) found, breaking the loop."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
+              break
+            # Check if the status contains FAILED or DELETED FAILED
+            elif [[ "$CURRENT_STATUS" == *"FAILED"* ]]; then
+              echo "Status FAILED (or DELETED FAILED) found, reverting to previous image (n-1)."
+
+              # Determine previous version (n-1)
+              BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+              PATCH=$((PATCH - 1))
+              PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
+              INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+
+              echo "Reverting to previous image: $PREVIOUS_IMAGE_PATH"
+
+              # Create the container instance with the previous image (n-1)
+              PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --availability-domain "$LOGICAL_AD" \
+                --shape "CI.Standard.E4.Flex" \
+                --shape-config "$SHAPE_CONFIG_JSON" \
+                --containers "[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]" \
+                --vnics "$VNIC_JSON" \
+                --display-name "$INSTANCE_NAME" \
+                --query "data.id" --raw-output)
+
+              echo "Created new container instance with previous image (n-1) with ID: $PREVIOUS_INSTANCE"
+
+              # Wait for the previous instance to become ACTIVE
+              while true; do
+                PREVIOUS_STATUS=$(oci container-instances container-instance list \
+                  --compartment-id "$OCI_COMPARTMENT_OCID" \
+                  --region "$OCI_CLI_REGION" \
+                  --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp$PREVIOUS_VERSION") | .["lifecycle-state"]')
+
+                echo "Previous status: $PREVIOUS_STATUS"
+
+                # Check if the previous status contains "ACTIVE" or "DELETED ACTIVE"
+                if [[ "$PREVIOUS_STATUS" == *"ACTIVE"* ]]; then
+                  echo "Previous instance is ACTIVE (or DELETED ACTIVE). Breaking the loop."
+                  oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                    --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version, build and deployment successful.\"}"
+                  break
+                # Check if the previous status contains "FAILED" or "DELETED FAILED"
+                elif [[ "$PREVIOUS_STATUS" == *"FAILED"* ]]; then
+                  echo "Previous instance is in FAILED state (or DELETED FAILED). Retrying..."
+                  sleep 10
+                fi
+              done
+              break
+            fi
+            sleep 5
+          done
