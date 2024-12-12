@@ -118,23 +118,17 @@ jobs:
 
       - name: Delete the current image from OCIR
         run: |
-          # Fetch the current version from .version file
           CURRENT_VERSION=$(cat .version)
           IMAGE_OCID=$(oci artifacts container image list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --query "data[?contains('display-name', '$CURRENT_VERSION')].id | [0]" \
             --raw-output)
 
-          echo "Found IMAGE_OCID for current version $CURRENT_VERSION: $IMAGE_OCID"
-
-          if [[ -n "$IMAGE_OCID" ]]; then
+          if [ -n "$IMAGE_OCID" ]; then
             echo "Deleting current image version $CURRENT_VERSION from OCIR registry..."
             oci artifacts container image delete \
               --image-id "$IMAGE_OCID" \
               --force
-            echo "Current image version $CURRENT_VERSION deleted successfully."
-          else
-            echo "No image found for current version $CURRENT_VERSION. Skipping deletion."
           fi
 
       - name: Fetch the previous image OCID
@@ -149,12 +143,8 @@ jobs:
             --query "data[?contains('display-name', '$PREVIOUS_VERSION')].id | [0]" \
             --raw-output)
 
-          echo "Previous image OCID for version $PREVIOUS_VERSION: $PREVIOUS_IMAGE_OCID"
-
-          if [[ -n "$PREVIOUS_IMAGE_OCID" ]]; then
-            echo "Previous image found. Proceeding with revert."
-          else
-            echo "Previous image not found. Skipping revert."
+          if [ -n "$PREVIOUS_IMAGE_OCID" ]; then
+            echo "Previous image found: $PREVIOUS_IMAGE_OCID."
           fi
 
       - name: Create new container instance and wait for status
@@ -176,9 +166,6 @@ jobs:
             --display-name "$INSTANCE_NAME" \
             --query "data.id" --raw-output)
 
-          echo "Created new container instance with ID: $NEW_INSTANCE"
-
-          # Wait for instance to become ACTIVE or FAILED
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
             CURRENT_STATUS=$(oci container-instances container-instance list \
@@ -186,108 +173,16 @@ jobs:
               --region "$OCI_CLI_REGION" \
               --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
 
-            echo "Current status: $CURRENT_STATUS"
-
             if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
-              echo "Status ACTIVE found, breaking the loop."
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
+              echo "Container instance is ACTIVE."
+              oci ons message publish --topic-id "$OCI_NOTIFICATION_TOPIC_OCID" \
+                --body '{"status": "success", "version": "$VERSION", "message": "Build and deployment successful."}'
               break
             elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
-              echo "Status FAILED found, breaking the loop."
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
-
-              # Start reverting process
-              echo "No worries, I am going to revert to the previous container image."
-
-              # Delete the failed container instance
-              FAILED_INSTANCE_ID=$(oci container-instances container-instance list \
-                --compartment-id "$OCI_COMPARTMENT_OCID" \
-                --region "$OCI_CLI_REGION" \
-                --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'" and .["lifecycle-state"] == "FAILED") | .id')
-
-              if [ -n "$FAILED_INSTANCE_ID" ]; then
-                oci container-instances container-instance delete --container-instance-id "$FAILED_INSTANCE_ID" --force
-                while true; do
-                  STATUS=$(oci container-instances container-instance get \
-                    --container-instance-id "$FAILED_INSTANCE_ID" \
-                    --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-                  if [ "$STATUS" == "DELETED" ]; then
-                    break
-                  fi
-                  sleep 10
-                done
-              fi
-
-              # Revert the version to the previous one
-              PREVIOUS_VERSION="v$MAJOR.$MINOR.$((PATCH - 1))"
-              echo "Reverting to previous version: $PREVIOUS_VERSION"
-              echo "$PREVIOUS_VERSION" > .version
-              echo "VERSION=$PREVIOUS_VERSION" >> $GITHUB_ENV
-
-              # Add delay before deleting the image
-              sleep 10
-
-              # Delete the image from OCIR
-              echo "Deleting Docker image version $VERSION from OCIR registry..."
-              IMAGE_OCID=$(oci artifacts container image list \
-                --compartment-id "$OCI_COMPARTMENT_OCID" \
-                --query "data[?contains('display-name', '$VERSION')].id | [0]" \
-                --raw-output)
-
-              echo "Found IMAGE_OCID: $IMAGE_OCID"
-
-              if [[ -n "$IMAGE_OCID" ]]; then
-                echo "Image OCID for version $VERSION found: $IMAGE_OCID. Deleting..."
-                oci artifacts container image delete \
-                  --image-id "$IMAGE_OCID" \
-                  --force
-                echo "Image version $VERSION deleted successfully."
-              else
-                echo "No image found for version $VERSION. Skipping deletion."
-              fi
-
-              # Recreate container with the previous version
-              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
-              INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-              NEW_INSTANCE=$(oci container-instances container-instance create \
-                --compartment-id "$OCI_COMPARTMENT_OCID" \
-                --availability-domain "$LOGICAL_AD" \
-                --shape "CI.Standard.E4.Flex" \
-                --shape-config "$SHAPE_CONFIG_JSON" \
-                --containers "[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]" \
-                --vnics "$VNIC_JSON" \
-                --display-name "$INSTANCE_NAME" \
-                --query "data.id" --raw-output)
-
-              echo "Created new container instance with previous image, ID: $NEW_INSTANCE"
-
-              # Wait for the previous version container to become ACTIVE
-              while true; do
-                echo "Checking lifecycle state of previous container instance..."
-                CURRENT_STATUS=$(oci container-instances container-instance list \
-                  --compartment-id "$OCI_COMPARTMENT_OCID" \
-                  --region "$OCI_CLI_REGION" \
-                  --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
-
-                echo "Current status: $CURRENT_STATUS"
-
-                if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
-                  echo "Reverted container is ACTIVE."
-                  oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                    --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version successfully.\"}"
-                  break
-                fi
-
-                sleep 10
-              done
-
+              echo "Container instance creation FAILED."
               break
             else
-              echo "Status is neither ACTIVE nor FAILED. Retrying..."
+              echo "Current status: $CURRENT_STATUS. Waiting..."
             fi
-
-            # Sleep before checking again
             sleep 10
           done
