@@ -89,31 +89,44 @@ jobs:
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker push ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
 
-      - name: Delete previous container instance
+      - name: Delete current container instance and wait for status to transition to DELETED
         run: |
           CURRENT_VERSION=$(cat .version)
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
           PATCH=$((PATCH - 1))
           PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+          CURRENT_INSTANCE_NAME="icsapp$CURRENT_VERSION"
 
+          # Get the current container instance ID
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
+            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$CURRENT_INSTANCE_NAME'" and .["lifecycle-state"] == "FAILED") | .id')
 
           if [ -n "$INSTANCE_ID" ]; then
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+            # Delete the current container instance
+            oci container-instances container-instance delete \
+              --container-instance-id "$INSTANCE_ID" \
+              --force
+            echo "Deleted failed container instance: $CURRENT_INSTANCE_NAME"
+
+            # Wait for the container instance to transition to DELETED state
             while true; do
               STATUS=$(oci container-instances container-instance get \
                 --container-instance-id "$INSTANCE_ID" \
                 --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+
+              echo "Current status: $STATUS"
+
               if [ "$STATUS" == "DELETED" ]; then
+                echo "Container instance successfully deleted."
                 break
               fi
               sleep 10
             done
+          else
+            echo "No failed instance found for $CURRENT_INSTANCE_NAME."
           fi
 
       - name: Create new container instance and wait for status
@@ -176,7 +189,7 @@ jobs:
               echo "Created new container instance with ID: $PREVIOUS_INSTANCE"
 
               while true; do
-                echo "Checking lifecycle state of $INSTANCE_NAME..."
+                echo "Checking lifecycle state of previous image (n-1)..."
                 PREVIOUS_STATUS=$(oci container-instances container-instance list \
                   --compartment-id "$OCI_COMPARTMENT_OCID" \
                   --region "$OCI_CLI_REGION" \
@@ -204,27 +217,8 @@ jobs:
               git config --local user.name "harishsp1996"
               git config --local user.email "harish.sp.4196@gmail.com"
               git add .version
-              git commit -m "Revert version to $PREVIOUS_VERSION after failed build"
+              git commit -m "Revert to previous version: $PREVIOUS_VERSION"
               git push
-              echo "Version file reverted and pushed."
-
-              # Remove the current image (n) if it exists
-              IMAGE_OCID=$(oci artifacts container image list \
-                --compartment-id "$OCI_COMPARTMENT_OCID" \
-                --query "data[?contains('display-name', '$VERSION')].id | [0]" \
-                --raw-output)
-
-              echo "Found IMAGE_OCID: $IMAGE_OCID"
-
-              if [[ -n "$IMAGE_OCID" ]]; then
-                oci artifacts container image delete \
-                  --image-id "$IMAGE_OCID" \
-                  --force
-                echo "Image version $VERSION deleted successfully."
-              else
-                echo "No image found for version $VERSION. Skipping deletion."
-              fi
-
               break
             fi
             sleep 10
