@@ -116,6 +116,47 @@ jobs:
             done
           fi
 
+      - name: Delete the current image from OCIR
+        run: |
+          # Fetch the current version from .version file
+          CURRENT_VERSION=$(cat .version)
+          IMAGE_OCID=$(oci artifacts container image list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --query "data[?contains('display-name', '$CURRENT_VERSION')].id | [0]" \
+            --raw-output)
+
+          echo "Found IMAGE_OCID for current version $CURRENT_VERSION: $IMAGE_OCID"
+
+          if [[ -n "$IMAGE_OCID" ]]; then
+            echo "Deleting current image version $CURRENT_VERSION from OCIR registry..."
+            oci artifacts container image delete \
+              --image-id "$IMAGE_OCID" \
+              --force
+            echo "Current image version $CURRENT_VERSION deleted successfully."
+          else
+            echo "No image found for current version $CURRENT_VERSION. Skipping deletion."
+          fi
+
+      - name: Fetch the previous image OCID
+        run: |
+          CURRENT_VERSION=$(cat .version)
+          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          PATCH=$((PATCH - 1))
+          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+          PREVIOUS_IMAGE_OCID=$(oci artifacts container image list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --query "data[?contains('display-name', '$PREVIOUS_VERSION')].id | [0]" \
+            --raw-output)
+
+          echo "Previous image OCID for version $PREVIOUS_VERSION: $PREVIOUS_IMAGE_OCID"
+
+          if [[ -n "$PREVIOUS_IMAGE_OCID" ]]; then
+            echo "Previous image found. Proceeding with revert."
+          else
+            echo "Previous image not found. Skipping revert."
+          fi
+
       - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
@@ -208,7 +249,7 @@ jobs:
               fi
 
               # Recreate container with the previous version
-              PREVIOUS_IMAGE_PATH="oci://invalid-repo/invalid-image:$PREVIOUS_VERSION"
+              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
               INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
               NEW_INSTANCE=$(oci container-instances container-instance create \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
