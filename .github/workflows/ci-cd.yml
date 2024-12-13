@@ -116,6 +116,28 @@ jobs:
             done
           fi
 
+      - name: Delete Docker image from OCIR
+        run: |
+          VERSION="${{ env.VERSION }}"
+          REPO_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}"
+          
+          # Fetch the OCID of the image associated with the version
+          IMAGE_OCID=$(oci artifacts container image list \
+              --compartment-id ${{ secrets.COMPARTMENT_ID }} \
+              --repository-name $REPO_PATH \
+              --region ${{ secrets.REGION }} \
+              --display-name "$REPO_PATH:$VERSION" \
+              --raw-output \
+              | jq -r '.data.items[0].id')
+
+          # Check if the image OCID is found, then delete it
+          if [ "$IMAGE_OCID" != "null" ]; then
+            echo "Deleting image with OCID: $IMAGE_OCID"
+            oci artifacts container image delete --image-id $IMAGE_OCID --force --region ${{ secrets.REGION }}
+          else
+            echo "Image not found: $REPO_PATH:$VERSION"
+          fi
+
       - name: Create new container instance and wait for status
         run: |
           VERSION="${{ env.VERSION }}"
@@ -174,7 +196,6 @@ jobs:
 
               # Extract the OCID of the image matching the current version
               IMAGE_OCID=$(echo "$IMAGE_LIST" | jq -r '.data[] | select(.["display-name"] == "cicd:'$CURRENT_VERSION'") | .id')
-
               if [ -n "$IMAGE_OCID" ]; then
                 echo "Deleting image with OCID: $IMAGE_OCID"
                 oci artifacts container image delete \
