@@ -173,7 +173,7 @@ jobs:
               echo "Image list: $IMAGE_LIST"
 
               # Extract the OCID of the image matching the current version
-              IMAGE_OCID=$(echo "$IMAGE_LIST" | jq -r '.data[] | select(.["display-name"] == "'$CURRENT_VERSION'") | .id')
+              IMAGE_OCID=$(echo "$IMAGE_LIST" | jq -r '.data[] | select(.["display-name"] == "cicd:'$CURRENT_VERSION'") | .id')
 
               if [ -n "$IMAGE_OCID" ]; then
                 echo "Deleting image with OCID: $IMAGE_OCID"
