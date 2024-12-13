@@ -55,7 +55,7 @@ jobs:
             VERSION=$(cat .version)
             echo "Current version: $VERSION"
           else
-            VERSION="v9.0.0"
+            VERSION="v8.0.0"
             echo "No version file found. Starting with version: $VERSION"
           fi
           BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
@@ -125,7 +125,6 @@ jobs:
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
 
-          # Create the new container instance with the current image version
           NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --availability-domain "$LOGICAL_AD" \
@@ -147,17 +146,29 @@ jobs:
 
             echo "Current status: $CURRENT_STATUS"
 
-            # Check if the status contains ACTIVE or DELETED ACTIVE
             if [[ "$CURRENT_STATUS" == *"ACTIVE"* ]]; then
-              echo "Status ACTIVE (or DELETED ACTIVE) found, breaking the loop."
+              echo "Status ACTIVE found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                 --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
               break
-            # Check if the status contains FAILED or DELETED FAILED
             elif [[ "$CURRENT_STATUS" == *"FAILED"* ]]; then
-              echo "Status FAILED (or DELETED FAILED) found, reverting to previous image (n-1)."
+              echo "Status FAILED found, deleting faulty image and reverting version."
 
-              # Determine previous version (n-1)
+              IMAGE_ID=$(oci artifacts container image list \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --repository-name "cicd" \
+                --region "$OCI_CLI_REGION" \
+                --query "data.items[?display-name=='$VERSION'].id | [0]" --raw-output)
+
+              if [ -n "$IMAGE_ID" ]; then
+                oci artifacts container image delete \
+                  --image-id "$IMAGE_ID" \
+                  --force \
+                  --region "$OCI_CLI_REGION"
+                echo "Deleted faulty image with ID: $IMAGE_ID"
+              fi
+
+              echo "Reverting to previous image."
               BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
               IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
               PATCH=$((PATCH - 1))
@@ -167,7 +178,6 @@ jobs:
 
               echo "Reverting to previous image: $PREVIOUS_IMAGE_PATH"
 
-              # Create the container instance with the previous image (n-1)
               PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
                 --availability-domain "$LOGICAL_AD" \
@@ -180,28 +190,12 @@ jobs:
 
               echo "Created new container instance with previous image (n-1) with ID: $PREVIOUS_INSTANCE"
 
-              # Wait for the previous instance to become ACTIVE
-              while true; do
-                PREVIOUS_STATUS=$(oci container-instances container-instance list \
-                  --compartment-id "$OCI_COMPARTMENT_OCID" \
-                  --region "$OCI_CLI_REGION" \
-                  --raw-output | jq -r '.data.items[] | select(.["display-name"] == "icsapp$PREVIOUS_VERSION") | .["lifecycle-state"]')
-
-                echo "Previous status: $PREVIOUS_STATUS"
-
-                # Check if the previous status contains "ACTIVE" or "DELETED ACTIVE"
-                if [[ "$CURRENT_STATUS" == *"ACTIVE"* || "$CURRENT_STATUS" == *"DELETED ACTIVE"* ]]; then
-                  echo "Previous instance is ACTIVE (or DELETED ACTIVE). Breaking the loop."
-                  oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                    --body "{\"status\": \"success\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version, build and deployment successful.\"}"
-                  break
-                # Check if the previous status contains "FAILED" or "DELETED FAILED"
-                elif [[ "$CURRENT_STATUS" == *"FAILED"* || "$CURRENT_STATUS" == *"DELETED FAILED"* ]]; then
-                  echo "Previous instance is in FAILED state (or DELETED FAILED). Retrying..."
-                  sleep 10
-                fi
-              done
+              git pull
+              echo "$PREVIOUS_VERSION" > .version
+              git add .version
+              git commit -m "Revert version to $PREVIOUS_VERSION due to deployment failure"
+              git push
               break
             fi
-            sleep 5
+            sleep 10
           done
