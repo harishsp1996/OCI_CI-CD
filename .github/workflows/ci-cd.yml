@@ -123,7 +123,9 @@ jobs:
           INSTANCE_NAME="icsapp$VERSION"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-          CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
+          CONTAINER_JSON="[{
+            \"imageUrl\": \"$IMAGE_PATH\"
+          }]"
 
           NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
@@ -137,23 +139,28 @@ jobs:
 
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
+          # Wait for instance to become ACTIVE or FAILED
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
             CURRENT_STATUS=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
-              --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$INSTANCE_NAME\").\"lifecycle-state\"")
+              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
 
             echo "Current status: $CURRENT_STATUS"
 
-            if [[ "$CURRENT_STATUS" == *"ACTIVE"* ]]; then
+            if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
               echo "Status ACTIVE found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                 --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
               break
-            elif [[ "$CURRENT_STATUS" == *"FAILED"* ]]; then
-              echo "Status FAILED found, deleting faulty image and reverting version."
+            elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
+              echo "Status FAILED found, breaking the loop."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
 
+              echo "Reverting to previous image."
+			  
               IMAGE_ID=$(oci artifacts container image list \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
                 --repository-name "cicd" \
@@ -165,7 +172,7 @@ jobs:
                   --image-id "$IMAGE_ID" \
                   --force \
                   --region "$OCI_CLI_REGION"
-                echo "Deleted faulty image with ID: $IMAGE_ID"
+                echo "Deleted faulty image with ID: $IMAGE_ID using jq"
               fi
 
               echo "Reverting to previous image."
@@ -197,6 +204,8 @@ jobs:
               git push
 
               echo "Rollback to previous version ($PREVIOUS_VERSION) completed successfully."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Deployment failed and reverted to $PREVIOUS_VERSION.\"}"
               break
             fi
             sleep 10
