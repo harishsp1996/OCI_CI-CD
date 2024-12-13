@@ -123,9 +123,7 @@ jobs:
           INSTANCE_NAME="icsapp$VERSION"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
           VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-          CONTAINER_JSON="[{
-            \"imageUrl\": \"$IMAGE_PATH\"
-          }]"
+          CONTAINER_JSON="[{\"imageUrl\": \"$IMAGE_PATH\"}]"
 
           NEW_INSTANCE=$(oci container-instances container-instance create \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
@@ -160,7 +158,7 @@ jobs:
                 --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
 
               echo "Reverting to previous image."
-			  
+
               IMAGE_ID=$(oci artifacts container image list \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
                 --repository-name "cicd" \
