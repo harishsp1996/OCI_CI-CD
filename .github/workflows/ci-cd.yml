@@ -112,7 +112,7 @@ jobs:
               if [ "$STATUS" == "DELETED" ]; then
                 break
               fi
-              sleep 20
+              sleep 10
             done
           fi
 
@@ -158,16 +158,21 @@ jobs:
                 --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
 
               echo "Reverting to previous image."
+
+              # Sleep 20 seconds before reverting
               sleep 20
 
-              # Delete the faulty image
-              CURRENT_VERSION="${{ env.VERSION }}"
+              # List images in the OCIR repository
               IMAGE_LIST=$(oci artifacts container image list \
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
                 --repository-name "cicd" \
                 --region "$OCI_CLI_REGION" \
                 --raw-output)
 
+              # Print the full image list for debugging
+              echo "Image list: $IMAGE_LIST"
+
+              # Extract the OCID of the image matching the current version
               IMAGE_OCID=$(echo "$IMAGE_LIST" | jq -r '.data[] | select(.["display-name"] == "'$CURRENT_VERSION'") | .id')
 
               if [ -n "$IMAGE_OCID" ]; then
@@ -213,5 +218,5 @@ jobs:
                 --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Deployment failed and reverted to $PREVIOUS_VERSION.\"}"
               break
             fi
-            sleep 20
+            sleep 10
           done
