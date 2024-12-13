@@ -159,19 +159,23 @@ jobs:
 
               echo "Reverting to previous image."
 
-              IMAGE_ID=$(oci artifacts container image list \
-                --compartment-id "$OCI_COMPARTMENT_OCID" \
-                --repository-name "cicd" \
-                --region "$OCI_CLI_REGION" \
-                --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$VERSION\").id")
+      - name: Delete Faulty Container Image
+        run: |
+          echo "Fetching faulty image ID for version $VERSION..."
+          VERSION="${{ env.VERSION }}"
+          IMAGE_ID=$(oci artifacts container image list \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --repository-name "cicd" \
+            --region "$OCI_CLI_REGION" \
+            --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$VERSION\").id")
 
-              if [ -n "$IMAGE_ID" ]; then
-                oci artifacts container image delete \
-                  --image-id "$IMAGE_ID" \
-                  --force \
-                  --region "$OCI_CLI_REGION"
-                echo "Deleted faulty image with ID: $IMAGE_ID using jq"
-              fi
+          if [ -n "$IMAGE_ID" ]; then
+            echo "Found faulty image with ID: $IMAGE_ID. Deleting..."
+            oci artifacts container image delete \
+              --image-id "$IMAGE_ID" --force --region "$OCI_CLI_REGION"
+          else
+            echo "No faulty image found for version $VERSION."
+          fi
 
               echo "Reverting to previous image."
               BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
