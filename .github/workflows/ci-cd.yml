@@ -137,7 +137,6 @@ jobs:
 
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
-          # Wait for instance to become ACTIVE or FAILED
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
             CURRENT_STATUS=$(oci container-instances container-instance list \
@@ -147,17 +146,13 @@ jobs:
 
             echo "Current status: $CURRENT_STATUS"
 
-            if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
+            if [[ "$CURRENT_STATUS" == *"ACTIVE"* ]]; then
               echo "Status ACTIVE found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                 --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
               break
-            elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
-              echo "Status FAILED found, breaking the loop."
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
-
-              echo "Reverting to previous image."
+            elif [[ "$CURRENT_STATUS" == *"FAILED"* ]]; then
+              echo "Status FAILED found, deleting faulty image and reverting version."
 
       - name: Delete Faulty Container Image
         run: |
