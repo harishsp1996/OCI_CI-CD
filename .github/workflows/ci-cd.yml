@@ -137,6 +137,7 @@ jobs:
 
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
+          # Wait for instance to become ACTIVE or FAILED
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
             CURRENT_STATUS=$(oci container-instances container-instance list \
@@ -146,31 +147,33 @@ jobs:
 
             echo "Current status: $CURRENT_STATUS"
 
-            if [[ "$CURRENT_STATUS" == *"ACTIVE"* ]]; then
+            if [[ "$CURRENT_STATUS" == "ACTIVE" ]]; then
               echo "Status ACTIVE found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                 --body "{\"status\": \"success\", \"version\": \"$VERSION\", \"message\": \"Build and deployment successful.\"}"
               break
-            elif [[ "$CURRENT_STATUS" == *"FAILED"* ]]; then
-              echo "Status FAILED found, deleting faulty image and reverting version."
+            elif [[ "$CURRENT_STATUS" == "FAILED" ]]; then
+              echo "Status FAILED found, breaking the loop."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
 
-      - name: Delete Faulty Container Image
-        run: |
-          echo "Fetching faulty image ID for version $VERSION..."
-          VERSION="${{ env.VERSION }}"
-          IMAGE_ID=$(oci artifacts container image list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --repository-name "cicd" \
-            --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$VERSION\").id")
+              echo "Reverting to previous image."
 
-          if [ -n "$IMAGE_ID" ]; then
-            echo "Found faulty image with ID: $IMAGE_ID. Deleting..."
-            oci artifacts container image delete \
-              --image-id "$IMAGE_ID" --force --region "$OCI_CLI_REGION"
-          else
-            echo "No faulty image found for version $VERSION."
-          fi
+              echo "Fetching faulty image ID for version $VERSION..."
+              VERSION="${{ env.VERSION }}"
+              IMAGE_ID=$(oci artifacts container image list \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --repository-name "cicd" \
+                --region "$OCI_CLI_REGION" \
+                --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$VERSION\").id")
+
+              if [ -n "$IMAGE_ID" ]; then
+                echo "Found faulty image with ID: $IMAGE_ID. Deleting..."
+                oci artifacts container image delete \
+                  --image-id "$IMAGE_ID" --force --region "$OCI_CLI_REGION"
+              else
+                echo "No faulty image found for version $VERSION."
+              fi
 
               echo "Reverting to previous image."
               BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
