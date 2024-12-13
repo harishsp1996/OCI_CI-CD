@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pip
-          pip3 install oci-cli
+          pip3 install oci-cli jq
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
@@ -101,7 +101,7 @@ jobs:
           INSTANCE_ID=$(oci container-instances container-instance list \
             --compartment-id "$OCI_COMPARTMENT_OCID" \
             --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$PREVIOUS_INSTANCE_NAME'" and .["lifecycle-state"] == "ACTIVE") | .id')
+            --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$PREVIOUS_INSTANCE_NAME\" and .\"lifecycle-state\" == \"ACTIVE\").id")
 
           if [ -n "$INSTANCE_ID" ]; then
             oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
@@ -142,7 +142,7 @@ jobs:
             CURRENT_STATUS=$(oci container-instances container-instance list \
               --compartment-id "$OCI_COMPARTMENT_OCID" \
               --region "$OCI_CLI_REGION" \
-              --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$INSTANCE_NAME'") | .["lifecycle-state"]')
+              --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$INSTANCE_NAME\").\"lifecycle-state\"")
 
             echo "Current status: $CURRENT_STATUS"
 
@@ -158,7 +158,7 @@ jobs:
                 --compartment-id "$OCI_COMPARTMENT_OCID" \
                 --repository-name "cicd" \
                 --region "$OCI_CLI_REGION" \
-                --query "data.items[?display-name=='$VERSION'].id | [0]" --raw-output)
+                --raw-output | jq -r ".data[] | select(.\"display-name\" == \"$VERSION\").id")
 
               if [ -n "$IMAGE_ID" ]; then
                 oci artifacts container image delete \
@@ -197,15 +197,7 @@ jobs:
               git push
 
               echo "Rollback to previous version ($PREVIOUS_VERSION) completed successfully."
-              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-                --body "{\"status\": \"reverted\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Reverted to previous version due to deployment failure.\"}"
               break
             fi
             sleep 10
           done
-
-      - name: Send Failure Notification
-        if: failure()
-        run: |
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failed\", \"message\": \"Build step failed. Please investigate.\"}"
