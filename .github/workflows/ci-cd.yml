@@ -82,7 +82,36 @@ jobs:
           docker buildx build --platform linux/amd64 -t cicd:$VERSION .
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION
           docker tag cicd:$VERSION ${{ steps.get-ocir-repository.outputs.repo_path }}:latest
+     
+      - name: Post-Build Action
+        if: always() # Ensures the step runs no matter the job outcome
+        run: |
+          # Check if the build failed
+          if [ "${{ job.status }}" == "failure" ]; then
+            echo "Build failed. Reverting to the previous version."
 
+            # Determine the previous version
+            CURRENT_VERSION=$(cat .version)
+            BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+            PATCH=$((PATCH - 1))
+            PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+
+            # Rollback the version file
+            echo "$PREVIOUS_VERSION" > .version
+            git add .version
+            git commit -m "Revert version to $PREVIOUS_VERSION due to build failure"
+            git push
+
+            # Send failure notification with failed step name
+            FAILED_STEP="${{ steps.commit-version.outputs.step-name }}" # Failed step
+            echo "Sending failure notification for step: $FAILED_STEP"
+            oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+              --body "{\"status\": \"failure\", \"step\": \"$FAILED_STEP\", \"version\": \"$PREVIOUS_VERSION\", \"message\": \"Build failed and reverted to $PREVIOUS_VERSION.\"}"
+          else
+            echo "Build succeeded. No rollback needed."
+          fi
+          
       - name: Push Docker image to OCIR
         run: |
           VERSION="${{ env.VERSION }}"
