@@ -116,7 +116,7 @@ jobs:
             done
           fi
 
-      - name: Create new container instance and wait for status
+      - name: Create new container instance and handle failure
         run: |
           VERSION="${{ env.VERSION }}"
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
@@ -158,93 +158,74 @@ jobs:
               echo "Status FAILED found, breaking the loop."
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                 --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
-              FAILURE_FLAG="true" # Set failure flag
+
+              # Failure handling: delete current image, failed container instance, and create previous instance
+              CURRENT_VERSION=$(cat .version)
+              IMAGE_OCID=$(oci artifacts container image list \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --repository-name "cicd" \
+                --region "$OCI_CLI_REGION" \
+                --query "data.items[?version=='$CURRENT_VERSION'].id | [0]" --raw-output)
+
+              if [ -n "$IMAGE_OCID" ]; then
+                echo "Deleting image with version $CURRENT_VERSION and OCID: $IMAGE_OCID..."
+                oci artifacts container image delete --image-id "$IMAGE_OCID" --force
+              fi
+
+              CURRENT_INSTANCE_NAME="icsapp$CURRENT_VERSION"
+              INSTANCE_ID=$(oci container-instances container-instance list \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --region "$OCI_CLI_REGION" \
+                --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$CURRENT_INSTANCE_NAME'" and .["lifecycle-state"] == "FAILED") | .id')
+
+              if [ -n "$INSTANCE_ID" ]; then
+                oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
+                while true; do
+                  STATUS=$(oci container-instances container-instance get \
+                    --container-instance-id "$INSTANCE_ID" \
+                    --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
+                  if [ "$STATUS" == "DELETED" ]; then
+                    break
+                  fi
+                  sleep 20
+                done
+              fi
+
+              # Create previous container instance (n-1)
+              BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+              PATCH=$((PATCH - 1))
+              PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
+              PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+
+              PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
+              INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
+              SHAPE_CONFIG_JSON="{\"ocpus\": 2, \"memoryInGBs\": 2}"
+              VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
+              CONTAINER_JSON="[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]"
+
+              PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
+                --compartment-id "$OCI_COMPARTMENT_OCID" \
+                --availability-domain "$LOGICAL_AD" \
+                --shape "CI.Standard.E4.Flex" \
+                --shape-config "$SHAPE_CONFIG_JSON" \
+                --containers "$CONTAINER_JSON" \
+                --vnics "$VNIC_JSON" \
+                --display-name "$INSTANCE_NAME" \
+                --query "data.id" --raw-output)
+
+              echo "Created previous container instance (n-1) with ID: $PREVIOUS_INSTANCE"
+              git pull
+              echo "$PREVIOUS_VERSION" > .version
+              git add .version
+              git commit -m "Revert version to $PREVIOUS_VERSION due to deployment failure"
+              git push
+
+              echo "Rollback to previous version ($PREVIOUS_VERSION) completed successfully."
+              oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
+                --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Deployment failed and reverted to $PREVIOUS_VERSION.\"}"
+
               break
             fi
             sleep 20
           done
-
-      - name: Delete current image by version
-        if: ${{ steps.create-container-instance.outputs.FAILURE_FLAG == 'true' }}  # Only delete if failure flag is true
-        run: |
-          CURRENT_VERSION=$(cat .version)
-          echo "Fetching image ID for version: $CURRENT_VERSION..."
-          IMAGE_OCID=$(oci artifacts container image list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --repository-name "cicd" \
-            --region "$OCI_CLI_REGION" \
-            --query "data.items[?version=='$CURRENT_VERSION'].id | [0]" --raw-output)
-
-          if [ -z "$IMAGE_OCID" ]; then
-            echo "Error: No image found for version $CURRENT_VERSION."
-            exit 1
-          fi
-
-          echo "Deleting image with version $CURRENT_VERSION and OCID: $IMAGE_OCID..."
-          oci artifacts container image delete --image-id "$IMAGE_OCID" --force
-          echo "Image with version $CURRENT_VERSION deleted successfully."
-
-      - name: Delete current failed container instance
-        if: ${{ steps.create-container-instance.outputs.FAILURE_FLAG == 'true' }}  # Only delete if failure flag is true
-        run: |
-          CURRENT_VERSION=$(cat .version)
-          CURRENT_INSTANCE_NAME="icsapp$CURRENT_VERSION"
-
-          INSTANCE_ID=$(oci container-instances container-instance list \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --region "$OCI_CLI_REGION" \
-            --raw-output | jq -r '.data.items[] | select(.["display-name"] == "'$CURRENT_INSTANCE_NAME'" and .["lifecycle-state"] == "FAILED") | .id')
-
-          if [ -n "$INSTANCE_ID" ]; then
-            oci container-instances container-instance delete --container-instance-id "$INSTANCE_ID" --force
-            while true; do
-              STATUS=$(oci container-instances container-instance get \
-                --container-instance-id "$INSTANCE_ID" \
-                --query "data.lifecycle-state" --raw-output 2>/dev/null || echo "DELETED")
-              if [ "$STATUS" == "DELETED" ]; then
-                break
-              fi
-              sleep 20
-            done
-          fi
-
-      - name: Create previous container instance (n-1) if necessary
-        if: ${{ steps.create-container-instance.outputs.FAILURE_FLAG == 'true' }}  # Only create previous instance if failure flag is true
-        run: |
-          # Fetch the previous version (n-1)
-          CURRENT_VERSION=$(cat .version)
-          BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          PATCH=$((PATCH - 1))
-          PREVIOUS_VERSION="v$MAJOR.$MINOR.$PATCH"
-          PREVIOUS_INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-
-          PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
-          INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
-          SHAPE_CONFIG_JSON="{\"ocpus\": 2, \"memoryInGBs\": 2}"
-          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
-          CONTAINER_JSON="[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]"
-
-          # Create the previous container instance (n-1)
-          PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
-            --compartment-id "$OCI_COMPARTMENT_OCID" \
-            --availability-domain "$LOGICAL_AD" \
-            --shape "CI.Standard.E4.Flex" \
-            --shape-config "$SHAPE_CONFIG_JSON" \
-            --containers "$CONTAINER_JSON" \
-            --vnics "$VNIC_JSON" \
-            --display-name "$INSTANCE_NAME" \
-            --query "data.id" --raw-output)
-
-          echo "Created previous container instance (n-1) with ID: $PREVIOUS_INSTANCE"
-
-          git pull
-          echo "$PREVIOUS_VERSION" > .version
-          git add .version
-          git commit -m "Revert version to $PREVIOUS_VERSION due to deployment failure"
-          git push
-
-          echo "Rollback to previous version ($PREVIOUS_VERSION) completed successfully."
-          oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
-            --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Deployment failed and reverted to $PREVIOUS_VERSION.\"}"
-          sleep 10
