@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pip
-          pip3 install oci-cli jq
+          pip3 install oci-cli
 
       - name: Get or create an OCIR repository
         uses: oracle-actions/get-ocir-repository@v1.3.0
@@ -55,7 +55,7 @@ jobs:
             VERSION=$(cat .version)
             echo "Current version: $VERSION"
           else
-            VERSION="v10.0.0"
+            VERSION="v20.0.0"
             echo "No version file found. Starting with version: $VERSION"
           fi
           BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
@@ -137,6 +137,7 @@ jobs:
 
           echo "Created new container instance with ID: $NEW_INSTANCE"
 
+          # Wait for instance to become ACTIVE or FAILED
           while true; do
             echo "Checking lifecycle state of $INSTANCE_NAME..."
             CURRENT_STATUS=$(oci container-instances container-instance list \
@@ -156,6 +157,8 @@ jobs:
               oci ons message publish --topic-id $OCI_NOTIFICATION_TOPIC_OCID \
                 --body "{\"status\": \"failure\", \"version\": \"$VERSION\", \"message\": \"Build failed.\"}"
               sleep 20
+            fi
+          done
 
       - name: Delete current image by version
         run: |
@@ -198,7 +201,7 @@ jobs:
               sleep 20
             done
           fi
-          
+
           BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/v//')
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
           PATCH=$((PATCH - 1))
