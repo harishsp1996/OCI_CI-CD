@@ -25,7 +25,6 @@ jobs:
       SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
-      SECURITY_GROUP_OCID: ${{ secrets.SECURITY_GROUP_OCID }}
 
     steps:
       - name: Checkout Code
@@ -123,7 +122,7 @@ jobs:
           IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$VERSION"
           INSTANCE_NAME="icsapp$VERSION"
           SHAPE_CONFIG_JSON='{"ocpus": 2, "memoryInGBs": 2}'
-          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\", \"nsgIds\": [\"${{ secrets.SECURITY_GROUP_OCID }}\"]}]"
+          VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
           CONTAINER_JSON="[{
             \"imageUrl\": \"$IMAGE_PATH\"
           }]"
@@ -202,7 +201,7 @@ jobs:
               PREVIOUS_IMAGE_PATH="${{ steps.get-ocir-repository.outputs.repo_path }}:$PREVIOUS_VERSION"
               INSTANCE_NAME="icsapp$PREVIOUS_VERSION"
               SHAPE_CONFIG_JSON="{\"ocpus\": 2, \"memoryInGBs\": 2}"
-              VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\", \"nsgIds\": [\"${{ secrets.SECURITY_GROUP_OCID }}\"]}]"
+              VNIC_JSON="[{\"subnetId\": \"$SUBNET_OCID\"}]"
               CONTAINER_JSON="[{\"imageUrl\": \"$PREVIOUS_IMAGE_PATH\"}]"
 
               PREVIOUS_INSTANCE=$(oci container-instances container-instance create \
