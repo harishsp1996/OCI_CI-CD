@@ -55,7 +55,7 @@ jobs:
             VERSION=$(cat .version)
             echo "Current version: $VERSION"
           else
-            VERSION="v1.0.0"
+            VERSION="v12.0.0"
             echo "No version file found. Starting with version: $VERSION"
           fi
           BASE_VERSION=$(echo "$VERSION" | sed 's/v//')
