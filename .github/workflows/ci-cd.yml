@@ -25,7 +25,7 @@ jobs:
       SUBNET_OCID: ${{ secrets.SUBNET_OCID }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       OCI_NOTIFICATION_TOPIC_OCID: ${{ secrets.OCI_NOTIFICATION_TOPIC_OCID }}
-	  SECURITY_GROUP_OCID: ${{ secrets.SECURITY_GROUP_OCID }}
+      SECURITY_GROUP_OCID: ${{ secrets.SECURITY_GROUP_OCID }}
 
     steps:
       - name: Checkout Code
